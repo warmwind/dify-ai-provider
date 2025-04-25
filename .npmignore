@@ -1,0 +1,40 @@
+# Source files
+src/
+
+# Examples
+examples/
+
+# TypeScript config
+tsconfig.json
+tsup.config.ts
+
+# Git files
+.git
+.gitignore
+
+# Cache and temp folders
+.turbo
+dist-temp
+.next
+.vercel
+out
+coverage
+.coverage
+*.tsbuildinfo
+
+# OS files
+.DS_Store
+.direnv
+
+# IDE folders
+.idea
+.vscode
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Environment variables
+.env*
+!.env.example 

@@ -1,0 +1,55 @@
+{
+  "name": "dify-ai-provider",
+  "version": "0.1.0",
+  "description": "Dify provider for Vercel AI SDK",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "test": "vitest run"
+  },
+  "exports": {
+    "./package.json": "./package.json",
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    }
+  },
+  "keywords": [
+    "ai",
+    "dify",
+    "vercel-ai-sdk",
+    "provider"
+  ],
+  "author": "Oscar Jiang <pengj0520@gmail.com>",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/warmwind/dify-ai-provider"
+  },
+  "homepage": "https://github.com/warmwind/dify-ai-provider#readme",
+  "bugs": {
+    "url": "https://github.com/warmwind/dify-ai-provider/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "prepublishOnly": "npm run build",
+  "license": "MIT",
+  "dependencies": {
+    "@ai-sdk/provider": "^1.1.3",
+    "@ai-sdk/provider-utils": "^2.2.7",
+    "ai": "^4.3.9"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.5",
+    "tsup": "^8.0.1",
+    "tsx": "^4.7.0",
+    "typescript": "^5.3.3",
+    "vitest": "^1.0.0"
+  },
+  "peerDependencies": {
+    "ai": "^2.0.0"
+  }
+} 
