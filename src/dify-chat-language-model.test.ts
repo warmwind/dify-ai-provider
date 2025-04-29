@@ -167,4 +167,41 @@ describe("DifyChatLanguageModel", () => {
     const result = await reader.read();
     expect(result).toMatchSnapshot();
   });
+
+  it("should merge headers from options with headers from this.headers()", async () => {
+    let capturedHeaders: Record<string, string> = {};
+    fetchMock = async (url: string, options: any) => {
+      capturedHeaders = options.headers;
+      return {
+        ok: true,
+        text: async () =>
+          JSON.stringify({
+            id: "id1",
+            answer: "Hello world",
+            task_id: "task1",
+            conversation_id: "conv1",
+            metadata: {
+              usage: {
+                prompt_tokens: 5,
+                completion_tokens: 7,
+                total_tokens: 12,
+              },
+            },
+          }),
+        status: 200,
+      };
+    };
+
+    const model = makeModel();
+    await model.doGenerate({
+      messages: [{ role: "user", content: "Hi" }],
+      headers: { "Custom-Header": "custom-value" },
+      inputFormat: "messages",
+      mode: { type: "regular" },
+      prompt: [],
+    });
+
+    expect(capturedHeaders["Authorization"]).toBe("Bearer test");
+    expect(capturedHeaders["Custom-Header"]).toBe("custom-value");
+  });
 });

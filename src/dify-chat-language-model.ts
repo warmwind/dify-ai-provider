@@ -1,15 +1,15 @@
 import {
-  LanguageModelV1,
-  LanguageModelV1ObjectGenerationMode,
-  LanguageModelV1CallOptions,
-  LanguageModelV1StreamPart,
-  LanguageModelV1FinishReason,
   APICallError,
   JSONValue,
+  LanguageModelV1,
+  LanguageModelV1CallOptions,
+  LanguageModelV1FinishReason,
+  LanguageModelV1ObjectGenerationMode,
   LanguageModelV1ProviderMetadata,
+  LanguageModelV1StreamPart,
 } from "@ai-sdk/provider";
-import { generateId, loadApiKey } from "@ai-sdk/provider-utils";
-import { DifyChatSettings, DifyChatModelId } from "./dify-chat-settings";
+import { generateId } from "@ai-sdk/provider-utils";
+import { DifyChatModelId, DifyChatSettings } from "./dify-chat-settings";
 
 interface ModelOptions {
   provider: string;
@@ -257,6 +257,7 @@ export class DifyChatLanguageModel implements LanguageModelV1 {
   private readonly baseURL: string;
   private readonly headers: () => Record<string, string>;
   private readonly generateId: () => string;
+  private readonly chatMessagesEndpoint: string;
 
   constructor(
     modelId: DifyChatModelId,
@@ -268,6 +269,7 @@ export class DifyChatLanguageModel implements LanguageModelV1 {
     this.baseURL = options.baseURL;
     this.headers = options.headers;
     this.generateId = generateId;
+    this.chatMessagesEndpoint = `${this.baseURL}/chat-messages`;
 
     // Make sure we set a default response mode
     if (!this.settings.responseMode) {
@@ -290,16 +292,14 @@ export class DifyChatLanguageModel implements LanguageModelV1 {
     providerMetadata?: LanguageModelV1ProviderMetadata;
   }> {
     const { abortSignal } = options;
-
     const requestBody = this.getRequestBody(options);
-    const fetchOptions = {
-      method: "POST",
-      headers: this.headers(),
-      body: JSON.stringify(requestBody),
-      signal: abortSignal,
-    };
+    const fetchOptions = this.createFetchOptions(
+      requestBody,
+      options.headers,
+      abortSignal
+    );
 
-    const response = await fetch(`${this.baseURL}/chat-messages`, fetchOptions);
+    const response = await fetch(this.chatMessagesEndpoint, fetchOptions);
 
     let responseData;
     try {
@@ -308,7 +308,7 @@ export class DifyChatLanguageModel implements LanguageModelV1 {
       if (!response.ok) {
         throw new APICallError({
           message: `Dify API returned ${response.status}: ${responseText}`,
-          url: `${this.baseURL}/chat-messages`,
+          url: this.chatMessagesEndpoint,
           requestBodyValues: requestBody,
           statusCode: response.status,
           responseBody: responseText,
@@ -323,7 +323,7 @@ export class DifyChatLanguageModel implements LanguageModelV1 {
 
       throw new APICallError({
         message: error instanceof Error ? error.message : "Unknown error",
-        url: `${this.baseURL}/chat-messages`,
+        url: this.chatMessagesEndpoint,
         requestBodyValues: requestBody,
         cause: error,
       });
@@ -337,10 +337,7 @@ export class DifyChatLanguageModel implements LanguageModelV1 {
         promptTokens: responseData.metadata?.usage?.prompt_tokens || 0,
         completionTokens: responseData.metadata?.usage?.completion_tokens || 0,
       },
-      rawCall: {
-        rawPrompt: options.messages || options.prompt,
-        rawSettings: { ...this.settings },
-      },
+      rawCall: this.createRawCall(options),
       providerMetadata: {
         difyWorkflowData: {
           conversationId: responseData.conversation_id as JSONValue,
@@ -358,32 +355,26 @@ export class DifyChatLanguageModel implements LanguageModelV1 {
     };
   }> {
     const { abortSignal } = options;
-
     const requestBody = this.getRequestBody(options);
+    const fetchOptions = this.createFetchOptions(
+      requestBody,
+      options.headers,
+      abortSignal
+    );
 
-    const fetchOptions = {
-      method: "POST",
-      headers: this.headers(),
-      body: JSON.stringify(requestBody),
-      signal: abortSignal,
-    };
-
-    const response = await fetch(`${this.baseURL}/chat-messages`, fetchOptions);
+    const response = await fetch(this.chatMessagesEndpoint, fetchOptions);
 
     if (!response.body) {
       throw new APICallError({
         message: "Response body is null",
-        url: `${this.baseURL}/chat-messages`,
+        url: this.chatMessagesEndpoint,
         requestBodyValues: requestBody,
       });
     }
 
     return {
       stream: this.createStream(response.body),
-      rawCall: {
-        rawPrompt: options.messages || options.prompt,
-        rawSettings: { ...this.settings },
-      },
+      rawCall: this.createRawCall(options),
     };
   }
 
@@ -422,6 +413,7 @@ export class DifyChatLanguageModel implements LanguageModelV1 {
                       difyWorkflowData: {
                         conversationId: data.conversation_id as JSONValue,
                         messageId: data.message_id as JSONValue,
+                        taskId: data.task_id as JSONValue,
                       },
                     },
                     usage: {
@@ -461,6 +453,25 @@ export class DifyChatLanguageModel implements LanguageModelV1 {
   }
 
   /**
+   * Create fetch options with merged headers
+   */
+  private createFetchOptions(
+    requestBody: any,
+    customHeaders?: Record<string, string | undefined> | undefined,
+    abortSignal?: AbortSignal
+  ) {
+    return {
+      method: "POST",
+      headers: {
+        ...this.headers(),
+        ...(customHeaders || {}),
+      } as HeadersInit,
+      body: JSON.stringify(requestBody),
+      signal: abortSignal,
+    };
+  }
+
+  /**
    * Get the request body for the Dify API
    */
   private getRequestBody(options: ExtendedLanguageModelV1CallOptions) {
@@ -470,7 +481,7 @@ export class DifyChatLanguageModel implements LanguageModelV1 {
     if (!messages || !messages.length) {
       throw new APICallError({
         message: "No messages provided",
-        url: `${this.baseURL}/chat-messages`,
+        url: this.chatMessagesEndpoint,
         requestBodyValues: options,
       });
     }
@@ -480,7 +491,7 @@ export class DifyChatLanguageModel implements LanguageModelV1 {
     if (latestMessage.role !== "user") {
       throw new APICallError({
         message: "The last message must be a user message",
-        url: `${this.baseURL}/chat-messages`,
+        url: this.chatMessagesEndpoint,
         requestBodyValues: { latestMessageRole: latestMessage.role },
       });
     }
@@ -495,7 +506,7 @@ export class DifyChatLanguageModel implements LanguageModelV1 {
     if (hasAttachments) {
       throw new APICallError({
         message: "Dify provider does not currently support image attachments",
-        url: `${this.baseURL}/chat-messages`,
+        url: this.chatMessagesEndpoint,
         requestBodyValues: { hasAttachments: true },
       });
     }
@@ -534,6 +545,16 @@ export class DifyChatLanguageModel implements LanguageModelV1 {
       response_mode: this.settings.responseMode,
       conversation_id: conversationId,
       user: userId,
+    };
+  }
+
+  /**
+   * Create the rawCall object for response
+   */
+  private createRawCall(options: ExtendedLanguageModelV1CallOptions) {
+    return {
+      rawPrompt: options.messages || options.prompt,
+      rawSettings: { ...this.settings },
     };
   }
 

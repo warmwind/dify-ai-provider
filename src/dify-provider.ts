@@ -43,7 +43,7 @@ export function createDifyProvider(
         Authorization: `Bearer ${loadApiKey({
           apiKey: settings.apiKey,
           environmentVariableName: "DIFY_API_KEY",
-          description: "Dify API Key of one application",
+          description: "Dify API Key",
         })}`,
         "Content-Type": "application/json",
         ...options.headers,
