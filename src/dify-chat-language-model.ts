@@ -1,36 +1,57 @@
 import {
   APICallError,
-  JSONValue,
-  LanguageModelV1,
-  LanguageModelV1CallOptions,
-  LanguageModelV1FinishReason,
-  LanguageModelV1ObjectGenerationMode,
-  LanguageModelV1ProviderMetadata,
-  LanguageModelV1StreamPart,
+  type JSONValue,
+  type LanguageModelV1,
+  type LanguageModelV1CallOptions,
+  type LanguageModelV1FinishReason,
+  type LanguageModelV1ObjectGenerationMode,
+  type LanguageModelV1StreamPart,
 } from "@ai-sdk/provider";
-import { generateId } from "@ai-sdk/provider-utils";
-import { DifyChatModelId, DifyChatSettings } from "./dify-chat-settings";
+import {
+  combineHeaders,
+  createEventSourceResponseHandler,
+  createJsonErrorResponseHandler,
+  createJsonResponseHandler,
+  FetchFunction,
+  generateId,
+  postJsonToApi,
+  type ParseResult,
+} from "@ai-sdk/provider-utils";
+import { z } from "zod";
+import type { DifyChatModelId, DifyChatSettings } from "./dify-chat-settings";
 
-interface ModelOptions {
+interface ModelConfig {
   provider: string;
   baseURL: string;
   headers: () => Record<string, string>;
+  fetch?: FetchFunction;
 }
 
-interface CompletionResponse {
-  id: string;
-  answer: string;
-  task_id: string;
-  conversation_id: string;
-  message_id: string;
-  metadata: {
-    usage: {
-      completion_tokens: number;
-      prompt_tokens: number;
-      total_tokens: number;
-    };
-  };
-}
+const completionResponseSchema = z.object({
+  id: z.string(),
+  answer: z.string(),
+  task_id: z.string(),
+  conversation_id: z.string(),
+  message_id: z.string(),
+  metadata: z.object({
+    usage: z.object({
+      completion_tokens: z.number(),
+      prompt_tokens: z.number(),
+      total_tokens: z.number(),
+    }),
+  }),
+});
+
+const errorResponseSchema = z.object({
+  code: z.number(),
+  message: z.string(),
+  detail: z.optional(z.record(z.unknown())),
+});
+
+const difyFailedResponseHandler = createJsonErrorResponseHandler({
+  errorSchema: errorResponseSchema,
+  errorToMessage: (data) => `Dify API error: ${data.message}`,
+});
 
 // For TypeScript compatibility
 interface ExtendedLanguageModelV1CallOptions
@@ -41,235 +62,136 @@ interface ExtendedLanguageModelV1CallOptions
   }>;
 }
 
-// Streaming response types for Dify workflow
-interface DifyWorkflowData {
-  id: string;
-  workflow_id: string;
-  sequence_number?: number;
-  status?: string;
-  outputs?: Record<string, any>;
-  error?: any;
-  elapsed_time?: number;
-  total_tokens?: number;
-  total_steps?: string | number;
-  created_by?: {
-    id: string;
-    user: string;
-  };
-  created_at: number;
-  finished_at?: number;
-  exceptions_count?: number;
-  files?: any[];
-  inputs?: Record<string, any>;
-}
+// Define a base schema with common fields that all events might have
+const difyStreamEventBase = z
+  .object({
+    event: z.string(),
+    conversation_id: z.string().optional(),
+    message_id: z.string().optional(),
+    task_id: z.string().optional(),
+    created_at: z.number().optional(),
+  })
+  .passthrough();
 
-// Base node data properties shared by all node types
-interface DifyNodeDataBase {
-  id: string;
-  node_id: string;
-  node_type: string;
-  title: string;
-  index: number;
-  predecessor_node_id: string | null;
-  created_at: number;
-  finished_at?: number;
-  status?: string;
-  error?: any | null;
-  elapsed_time?: number;
-  extras?: Record<string, any>;
-  files?: any[];
-  parallel_id?: string | null;
-  parallel_start_node_id?: string | null;
-  parent_parallel_id?: string | null;
-  parent_parallel_start_node_id?: string | null;
-  iteration_id?: string | null;
-  loop_id?: string | null;
-  parallel_run_id?: string | null;
-  agent_strategy?: string | null;
-}
+// Create schemas for specific event types
+const workflowStartedSchema = difyStreamEventBase.extend({
+  event: z.literal("workflow_started"),
+  workflow_run_id: z.string(),
+  data: z
+    .object({
+      id: z.string(),
+      workflow_id: z.string(),
+      created_at: z.number(),
+    })
+    .passthrough(),
+});
 
-// Start node data
-interface DifyStartNodeData extends DifyNodeDataBase {
-  node_type: "start";
-  inputs: Record<string, any> | null;
-  outputs?: Record<string, any> | null;
-  process_data?: null;
-  execution_metadata?: null;
-}
+const workflowFinishedSchema = difyStreamEventBase.extend({
+  event: z.literal("workflow_finished"),
+  workflow_run_id: z.string(),
+  data: z
+    .object({
+      id: z.string(),
+      workflow_id: z.string(),
+      total_tokens: z.number().optional(),
+      created_at: z.number(),
+    })
+    .passthrough(),
+});
 
-// LLM node data
-interface DifyLLMNodeData extends DifyNodeDataBase {
-  node_type: "llm";
-  inputs: null;
-  process_data?: {
-    model_mode?: string;
-    prompts?: Array<{
-      role: string;
-      text: string;
-      files?: any[];
-    }>;
-    model_provider?: string;
-    model_name?: string;
-  };
-  outputs?: {
-    text?: string;
-    usage?: {
-      prompt_tokens: number;
-      prompt_unit_price: string;
-      prompt_price_unit: string;
-      prompt_price: string;
-      completion_tokens: number;
-      completion_unit_price: string;
-      completion_price_unit: string;
-      completion_price: string;
-      total_tokens: number;
-      total_price: string;
-      currency: string;
-      latency: number;
-    };
-    finish_reason?: string;
-  };
-  execution_metadata?: {
-    total_tokens: number;
-    total_price: string;
-    currency: string;
-  };
-}
+const nodeStartedSchema = difyStreamEventBase.extend({
+  event: z.literal("node_started"),
+  workflow_run_id: z.string(),
+  data: z
+    .object({
+      id: z.string(),
+      node_id: z.string(),
+      node_type: z.string(),
+    })
+    .passthrough(),
+});
 
-// Answer node data
-interface DifyAnswerNodeData extends DifyNodeDataBase {
-  node_type: "answer";
-  inputs: null;
-  process_data?: null;
-  outputs?: {
-    answer: string;
-    files: any[];
-  };
-  execution_metadata?: null;
-}
+const nodeFinishedSchema = difyStreamEventBase.extend({
+  event: z.literal("node_finished"),
+  workflow_run_id: z.string(),
+  data: z
+    .object({
+      id: z.string(),
+      node_id: z.string(),
+      node_type: z.string(),
+    })
+    .passthrough(),
+});
 
-// Union type of all node data types
-type DifyNodeData = DifyStartNodeData | DifyLLMNodeData | DifyAnswerNodeData;
+const messageSchema = difyStreamEventBase.extend({
+  event: z.literal("message"),
+  id: z.string().optional(),
+  answer: z.string(),
+  from_variable_selector: z.array(z.string()).optional(),
+});
 
-// Common properties for all event types
-interface DifyEventBase {
-  conversation_id?: string;
-  message_id?: string;
-  created_at?: number;
-  task_id?: string;
-}
+const messageEndSchema = difyStreamEventBase.extend({
+  event: z.literal("message_end"),
+  id: z.string(),
+  metadata: z
+    .object({
+      usage: z
+        .object({
+          prompt_tokens: z.number(),
+          completion_tokens: z.number(),
+          total_tokens: z.number(),
+        })
+        .passthrough(),
+    })
+    .passthrough(),
+  files: z.array(z.unknown()).optional(),
+});
 
-// Workflow events
-interface DifyWorkflowStartedEvent extends DifyEventBase {
-  event: "workflow_started";
-  workflow_run_id: string;
-  data: DifyWorkflowData;
-}
+const ttsMessageSchema = difyStreamEventBase.extend({
+  event: z.literal("tts_message"),
+  audio: z.string(),
+});
 
-interface DifyWorkflowFinishedEvent extends DifyEventBase {
-  event: "workflow_finished";
-  workflow_run_id: string;
-  data: DifyWorkflowData;
-}
+const ttsMessageEndSchema = difyStreamEventBase.extend({
+  event: z.literal("tts_message_end"),
+  audio: z.string(),
+});
 
-// Node events
-interface DifyNodeStartedEvent extends DifyEventBase {
-  event: "node_started";
-  workflow_run_id: string;
-  data: DifyNodeData;
-}
+// Combine all schemas with discriminatedUnion
+const difyStreamEventSchema = z
+  .discriminatedUnion("event", [
+    workflowStartedSchema,
+    workflowFinishedSchema,
+    nodeStartedSchema,
+    nodeFinishedSchema,
+    messageSchema,
+    messageEndSchema,
+    ttsMessageSchema,
+    ttsMessageEndSchema,
+  ])
+  .or(difyStreamEventBase); // Fallback for any other event types
 
-interface DifyNodeFinishedEvent extends DifyEventBase {
-  event: "node_finished";
-  workflow_run_id: string;
-  data: DifyNodeData;
-}
-
-// Message events
-interface DifyMessageEvent extends DifyEventBase {
-  event: "message";
-  id?: string;
-  answer: string;
-  from_variable_selector?: string[];
-}
-
-interface DifyMessageEndEvent extends DifyEventBase {
-  event: "message_end";
-  id: string;
-  metadata: {
-    usage: {
-      prompt_tokens: number;
-      prompt_unit_price: string;
-      prompt_price_unit: string;
-      prompt_price: string;
-      completion_tokens: number;
-      completion_unit_price: string;
-      completion_price_unit: string;
-      completion_price: string;
-      total_tokens: number;
-      total_price: string;
-      currency: string;
-      latency: number;
-    };
-    retriever_resources?: Array<{
-      position: number;
-      dataset_id: string;
-      dataset_name: string;
-      document_id: string;
-      document_name: string;
-      segment_id: string;
-      score: number;
-      content: string;
-    }>;
-  };
-  files?: any[];
-}
-
-// Text-to-speech events
-interface DifyTTSMessageEvent extends DifyEventBase {
-  event: "tts_message";
-  audio: string;
-}
-
-interface DifyTTSMessageEndEvent extends DifyEventBase {
-  event: "tts_message_end";
-  audio: string;
-}
-
-// Union of all possible event types
-type DifyStreamingResponse =
-  | DifyWorkflowStartedEvent
-  | DifyWorkflowFinishedEvent
-  | DifyNodeStartedEvent
-  | DifyNodeFinishedEvent
-  | DifyMessageEvent
-  | DifyMessageEndEvent
-  | DifyTTSMessageEvent
-  | DifyTTSMessageEndEvent;
+type DifyStreamEvent = z.infer<typeof difyStreamEventSchema>;
 
 export class DifyChatLanguageModel implements LanguageModelV1 {
   readonly specificationVersion = "v1";
-  readonly provider: string;
   readonly modelId: string;
   readonly defaultObjectGenerationMode: LanguageModelV1ObjectGenerationMode =
     undefined;
 
-  private readonly baseURL: string;
-  private readonly headers: () => Record<string, string>;
   private readonly generateId: () => string;
   private readonly chatMessagesEndpoint: string;
+  private readonly config: ModelConfig;
 
   constructor(
     modelId: DifyChatModelId,
-    private settings: DifyChatSettings = {},
-    options: ModelOptions
+    private settings: DifyChatSettings,
+    config: ModelConfig
   ) {
     this.modelId = modelId;
-    this.provider = options.provider;
-    this.baseURL = options.baseURL;
-    this.headers = options.headers;
+    this.config = config;
     this.generateId = generateId;
-    this.chatMessagesEndpoint = `${this.baseURL}/chat-messages`;
+    this.chatMessagesEndpoint = `${this.config.baseURL}/chat-messages`;
 
     // Make sure we set a default response mode
     if (!this.settings.responseMode) {
@@ -277,197 +199,159 @@ export class DifyChatLanguageModel implements LanguageModelV1 {
     }
   }
 
-  async doGenerate(options: ExtendedLanguageModelV1CallOptions): Promise<{
-    text?: string;
-    toolCalls?: any[];
-    finishReason: LanguageModelV1FinishReason;
-    usage: {
-      promptTokens: number;
-      completionTokens: number;
-    };
-    rawCall: {
-      rawPrompt: unknown;
-      rawSettings: Record<string, unknown>;
-    };
-    providerMetadata?: LanguageModelV1ProviderMetadata;
-  }> {
+  get provider(): string {
+    return this.config.provider;
+  }
+
+  async doGenerate(
+    options: ExtendedLanguageModelV1CallOptions
+  ): Promise<Awaited<ReturnType<LanguageModelV1["doGenerate"]>>> {
     const { abortSignal } = options;
     const requestBody = this.getRequestBody(options);
-    const fetchOptions = this.createFetchOptions(
-      requestBody,
-      options.headers,
-      abortSignal
-    );
 
-    const response = await fetch(this.chatMessagesEndpoint, fetchOptions);
-
-    let responseData;
-    try {
-      const responseText = await response.text();
-
-      if (!response.ok) {
-        throw new APICallError({
-          message: `Dify API returned ${response.status}: ${responseText}`,
-          url: this.chatMessagesEndpoint,
-          requestBodyValues: requestBody,
-          statusCode: response.status,
-          responseBody: responseText,
-        });
-      }
-
-      responseData = JSON.parse(responseText) as CompletionResponse;
-    } catch (error) {
-      if (error instanceof APICallError) {
-        throw error;
-      }
-
-      throw new APICallError({
-        message: error instanceof Error ? error.message : "Unknown error",
-        url: this.chatMessagesEndpoint,
-        requestBodyValues: requestBody,
-        cause: error,
-      });
-    }
+    const { responseHeaders, value: data } = await postJsonToApi({
+      url: this.chatMessagesEndpoint,
+      headers: combineHeaders(this.config.headers(), options.headers),
+      body: requestBody,
+      abortSignal,
+      failedResponseHandler: difyFailedResponseHandler,
+      successfulResponseHandler: createJsonResponseHandler(
+        completionResponseSchema
+      ),
+      fetch: this.config.fetch,
+    });
 
     return {
-      text: responseData.answer,
+      text: data.answer,
       toolCalls: [], // Dify doesn't currently support tool calls
-      finishReason: "stop", // Dify doesn't specify finish reason
+      finishReason: "stop" as LanguageModelV1FinishReason, // Dify doesn't specify finish reason
       usage: {
-        promptTokens: responseData.metadata?.usage?.prompt_tokens || 0,
-        completionTokens: responseData.metadata?.usage?.completion_tokens || 0,
+        promptTokens: data.metadata?.usage?.prompt_tokens || 0,
+        completionTokens: data.metadata?.usage?.completion_tokens || 0,
       },
       rawCall: this.createRawCall(options),
       providerMetadata: {
         difyWorkflowData: {
-          conversationId: responseData.conversation_id as JSONValue,
-          messageId: responseData.message_id as JSONValue,
+          conversationId: data.conversation_id as JSONValue,
+          messageId: data.message_id as JSONValue,
         },
+      },
+      rawResponse: {
+        headers: responseHeaders,
+        body: data,
+      },
+      request: { body: JSON.stringify(requestBody) },
+      response: {
+        id: data.id,
+        timestamp: new Date(),
       },
     };
   }
 
-  async doStream(options: ExtendedLanguageModelV1CallOptions): Promise<{
-    stream: ReadableStream<LanguageModelV1StreamPart>;
-    rawCall: {
-      rawPrompt: unknown;
-      rawSettings: Record<string, unknown>;
-    };
-  }> {
+  async doStream(
+    options: ExtendedLanguageModelV1CallOptions
+  ): Promise<Awaited<ReturnType<LanguageModelV1["doStream"]>>> {
     const { abortSignal } = options;
     const requestBody = this.getRequestBody(options);
-    const fetchOptions = this.createFetchOptions(
-      requestBody,
-      options.headers,
-      abortSignal
-    );
+    const body = { ...requestBody, response_mode: "streaming" };
 
-    const response = await fetch(this.chatMessagesEndpoint, fetchOptions);
+    const { responseHeaders, value: responseStream } = await postJsonToApi({
+      url: this.chatMessagesEndpoint,
+      headers: combineHeaders(this.config.headers(), options.headers),
+      body,
+      failedResponseHandler: difyFailedResponseHandler,
+      successfulResponseHandler: createEventSourceResponseHandler(
+        difyStreamEventSchema
+      ),
+      abortSignal,
+      fetch: this.config.fetch,
+    });
 
-    if (!response.body) {
-      throw new APICallError({
-        message: "Response body is null",
-        url: this.chatMessagesEndpoint,
-        requestBodyValues: requestBody,
-      });
-    }
+    let conversationId: string | undefined;
+    let messageId: string | undefined;
+    let taskId: string | undefined;
 
     return {
-      stream: this.createStream(response.body),
-      rawCall: this.createRawCall(options),
-    };
-  }
+      stream: responseStream.pipeThrough(
+        new TransformStream<
+          ParseResult<DifyStreamEvent>,
+          LanguageModelV1StreamPart
+        >({
+          transform(chunk, controller) {
+            if (!chunk.success) {
+              controller.enqueue({ type: "error", error: chunk.error });
+              return;
+            }
 
-  private createStream(
-    body: ReadableStream<Uint8Array>
-  ): ReadableStream<LanguageModelV1StreamPart> {
-    let buffer = ""; // Buffer to store incomplete chunks
+            const data = chunk.value;
 
-    const textDecoder = new TextDecoder();
+            // Store conversation/message IDs for metadata
+            if (data.conversation_id) conversationId = data.conversation_id;
+            if (data.message_id) messageId = data.message_id;
+            if (data.task_id) taskId = data.task_id;
 
-    return body.pipeThrough(
-      new TransformStream<Uint8Array, LanguageModelV1StreamPart>({
-        transform: async (chunk, controller) => {
-          const text = textDecoder.decode(chunk);
-          buffer += text; // Add new text to buffer
+            // Handle known event types
+            switch (data.event) {
+              case "workflow_finished": {
+                // Add block scope to prevent variable leakage
+                let totalTokens = 0;
 
-          // Process complete lines only
-          const lines = buffer.split("\n");
-          // Keep the last line in the buffer if it's incomplete
-          buffer = lines.pop() || "";
-
-          for (const line of lines) {
-            if (line.trim() === "") continue;
-
-            if (line.startsWith("data: ")) {
-              try {
-                const data = JSON.parse(line.slice(6)) as DifyStreamingResponse;
-
-                if (data.event === "workflow_finished") {
-                  // Type guard to make sure we have total_tokens
-                  const workflowData = data as DifyWorkflowFinishedEvent;
-                  controller.enqueue({
-                    type: "finish",
-                    finishReason: "stop",
-                    providerMetadata: {
-                      difyWorkflowData: {
-                        conversationId: data.conversation_id as JSONValue,
-                        messageId: data.message_id as JSONValue,
-                        taskId: data.task_id as JSONValue,
-                      },
-                    },
-                    usage: {
-                      promptTokens: 0, // We don't have this in workflow_finished
-                      completionTokens: workflowData.data?.total_tokens ?? 0,
-                    },
-                  });
-
-                  return;
+                // Type guard for data.data
+                if (
+                  "data" in data &&
+                  data.data &&
+                  typeof data.data === "object" &&
+                  "total_tokens" in data.data &&
+                  typeof data.data.total_tokens === "number"
+                ) {
+                  totalTokens = data.data.total_tokens;
                 }
 
-                if (data.event === "message") {
-                  const messageData = data as DifyMessageEvent;
+                controller.enqueue({
+                  type: "finish",
+                  finishReason: "stop",
+                  providerMetadata: {
+                    difyWorkflowData: {
+                      conversationId: conversationId as JSONValue,
+                      messageId: messageId as JSONValue,
+                      taskId: taskId as JSONValue,
+                    },
+                  },
+                  usage: {
+                    promptTokens: 0,
+                    completionTokens: totalTokens,
+                  },
+                });
+                break;
+              }
 
+              case "message": {
+                // Type guard for answer property
+                if ("answer" in data && typeof data.answer === "string") {
                   controller.enqueue({
                     type: "text-delta",
-                    textDelta: messageData.answer,
+                    textDelta: data.answer,
                   });
 
-                  if (messageData.id) {
+                  // Type guard for id property
+                  if ("id" in data && typeof data.id === "string") {
                     controller.enqueue({
                       type: "response-metadata",
-                      id: messageData.id,
+                      id: data.id,
                     });
                   }
                 }
-              } catch (error) {
-                console.error("Error parsing chunk:", line);
-                // Don't send error to controller for parsing errors
-                // This allows the stream to continue despite parse failures
+                break;
               }
-            }
-          }
-        },
-      })
-    );
-  }
 
-  /**
-   * Create fetch options with merged headers
-   */
-  private createFetchOptions(
-    requestBody: any,
-    customHeaders?: Record<string, string | undefined> | undefined,
-    abortSignal?: AbortSignal
-  ) {
-    return {
-      method: "POST",
-      headers: {
-        ...this.headers(),
-        ...(customHeaders || {}),
-      } as HeadersInit,
-      body: JSON.stringify(requestBody),
-      signal: abortSignal,
+              // Ignore other event types
+            }
+          },
+        })
+      ),
+      rawCall: this.createRawCall(options),
+      rawResponse: { headers: responseHeaders },
+      request: { body: JSON.stringify(body) },
     };
   }
 

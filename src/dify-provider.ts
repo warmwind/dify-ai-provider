@@ -1,4 +1,4 @@
-import { generateId, loadApiKey } from "@ai-sdk/provider-utils";
+import { FetchFunction, generateId, loadApiKey } from "@ai-sdk/provider-utils";
 import { DifyChatSettings, DifyChatModelId } from "./dify-chat-settings";
 import { DifyChatLanguageModel } from "./dify-chat-language-model";
 
@@ -27,6 +27,11 @@ export interface DifyProviderSettings {
    * Custom headers to include in the requests.
    */
   headers?: Record<string, string>;
+  /**
+   * Custom fetch implementation. You can use it as a middleware to intercept requests,
+   * or to provide a custom fetch implementation for e.g. testing.
+   */
+  fetch?: FetchFunction;
 }
 
 export function createDifyProvider(

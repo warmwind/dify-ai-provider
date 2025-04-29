@@ -14,6 +14,9 @@ importers:
       '@ai-sdk/provider-utils':
         specifier: ^2.2.7
         version: 2.2.7(zod@3.24.3)
+      zod:
+        specifier: ^3.24.3
+        version: 3.24.3
     devDependencies:
       '@types/node':
         specifier: ^20.11.5
