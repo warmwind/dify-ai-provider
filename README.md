@@ -6,6 +6,15 @@ A provider for [Dify.AI](https://dify.ai/) to work with [Vercel AI SDK](https://
 
 This provider allows you to easily integrate Dify AI's application workflow with your applications using the Vercel AI SDK.
 
+## Setting Up with Dify
+
+To use this provider, you'll need:
+
+- **Dify Account**: Create an account at [Dify.AI](https://dify.ai/)
+- **Dify Application**: Each application functions as a model within the Vercel AI SDK
+  - **Application ID**: Serves as the model ID in your code, can be found in the URL: `https://cloud.dify.ai/app/${dify-application-id}/workflow`
+  - **API Key**: can be obtained from the application settings
+
 ## Installation
 
 ```bash
@@ -26,10 +35,10 @@ yarn add dify-ai-provider
 import { generateText } from "ai";
 import { difyProvider } from "dify-ai-provider";
 
-process.env.DIFY_API_KEY = "your-dify-api-key"; // app-...
+process.env.DIFY_API_KEY = "dify-api-key"; // app-...
 
 // Create a Dify provider instance
-const dify = difyProvider.chat("your-dify-application-id", {
+const dify = difyProvider.chat("dify-application-id", {
   responseMode: "blocking",
 });
 
@@ -68,7 +77,7 @@ console.log("followUpText", followUpText);
 import { streamText } from "ai";
 import { difyProvider } from "dify-ai-provider";
 
-const dify = difyProvider.chat("your-dify-application-id");
+const dify = difyProvider.chat("dify-application-id");
 
 const stream = streamText({
   model: dify,
@@ -115,17 +124,7 @@ Creates a Dify chat model instance.
   - `responseMode` (string): Response mode, defaults to `"streaming"`.
   - `apiKey` (string): Your Dify application API key. If not provided, it will use the `DIFY_API_KEY` environment variable.
 
-## Getting API Keys
-
-To use this provider, you'll need:
-
-1. A Dify AI account
-2. A Dify application ID
-3. A Dify API key (secret key for server-side, application API key for client-side)
-
-Visit [Dify.AI](https://dify.ai/) to create an account and an application to obtain your API credentials.
-
 ## Documentation
 
-- [Vercel AI SDK documentation](https://sdk.vercel.ai/docs/introduction)\*\*
+- [Vercel AI SDK documentation](https://sdk.vercel.ai/docs/introduction)
 - [Dify API documentation](https://docs.dify.ai/guides/application-publishing/developing-with-apis)
