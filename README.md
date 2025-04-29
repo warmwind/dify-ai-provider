@@ -38,7 +38,7 @@ import { difyProvider } from "dify-ai-provider";
 process.env.DIFY_API_KEY = "dify-api-key"; // app-...
 
 // Create a Dify provider instance
-const dify = difyProvider.chat("dify-application-id", {
+const dify = difyProvider("dify-application-id", {
   responseMode: "blocking",
 });
 
@@ -77,7 +77,7 @@ console.log("followUpText", followUpText);
 import { streamText } from "ai";
 import { difyProvider } from "dify-ai-provider";
 
-const dify = difyProvider.chat("dify-application-id");
+const dify = difyProvider("dify-application-id");
 
 const stream = streamText({
   model: dify,
@@ -97,7 +97,7 @@ import { createDifyProvider } from "dify-ai-provider";
 const difyProvider = createDifyProvider({
   baseURL: "your-base-url",
 });
-const dify = difyProvider.chat("0d8a98af-0207-461d-8c80-5595a9f4aa8c", {
+const dify = difyProvider("0d8a98af-0207-461d-8c80-5595a9f4aa8c", {
   responseMode: "blocking",
   apiKey: "your-api-key",
 });
@@ -105,7 +105,7 @@ const dify = difyProvider.chat("0d8a98af-0207-461d-8c80-5595a9f4aa8c", {
 
 ## API Reference
 
-### `difyProvider.chat(modelId, settings?)`
+### `difyProvider(modelId, settings?)`
 
 Creates a Dify chat model instance.
 
