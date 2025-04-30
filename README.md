@@ -97,9 +97,9 @@ import { createDifyProvider } from "dify-ai-provider";
 const difyProvider = createDifyProvider({
   baseURL: "your-base-url",
 });
-const dify = difyProvider("0d8a98af-0207-461d-8c80-5595a9f4aa8c", {
+const dify = difyProvider("dify-application-id", {
   responseMode: "blocking",
-  apiKey: "your-api-key",
+  apiKey: "dify-api-key",
 });
 ```
 
