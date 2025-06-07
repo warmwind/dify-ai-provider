@@ -103,6 +103,56 @@ const dify = difyProvider("dify-application-id", {
 });
 ```
 
+### Use in Next.js AI Chatbot
+
+[Next.js AI Chatbot](https://github.com/vercel/ai-chatbot) is a full-featured, hackable Next.js AI chatbot built by Vercel. If you want to use it as a chatbot frontend for a Dify application, follow the guidelines below:
+
+#### Key Concepts
+
+- In Dify, an **application** corresponds to a **model ID** in the AI provider
+- A Dify **conversation** maps to a **chat session** in the chatbot
+- When you first send a message to Dify, it automatically generates a new conversation
+- You must save and reuse the conversation ID for subsequent messages to maintain chat continuity
+- Without reusing the conversation ID, each message will create a new conversation in Dify
+
+#### Getting the Conversation ID
+
+You can retrieve the Dify conversation ID from the `onFinish` callback:
+
+```ts
+onFinish: async ({ response, providerMetadata }) => {
+  const conversationId = providerMetadata?.difyWorkflowData?.conversationId as string;
+  const messageId = providerMetadata?.difyWorkflowData?.messageId as string;
+  // Save conversationId for future use
+}
+```
+
+#### Passing Headers for Conversation Continuity
+
+Pass the user ID and conversation ID in the headers when calling `streamText`:
+
+> **Important:** The `conversation_id` must be obtained from a Dify response. Using an invalid conversation ID will result in an error stating that the conversation does not exist.
+
+```ts
+const stream = createDataStream({
+  execute: (dataStream) => {
+    const headers = {
+      'user-id': session.user.id,
+      'chat-id': conversation_id_returned_from_dify
+    };
+
+    const result = streamText({
+      model: myProvider.languageModel(selectedChatModel),
+      headers,
+      // ... other options
+    });
+
+    // ... rest of implementation
+  }
+  // ... other options
+});
+```
+
 ## API Reference
 
 ### `difyProvider(modelId, settings?)`
