@@ -415,7 +415,7 @@ export class DifyChatLanguageModel implements LanguageModelV1 {
     }
 
     const conversationId = options.headers?.["chat-id"];
-    const userId = options.headers?.["user-id"];
+    const userId = options.headers?.["user-id"] ?? "you_should_pass_user-id";
     const {
       "chat-id": _,
       "user-id": __,
