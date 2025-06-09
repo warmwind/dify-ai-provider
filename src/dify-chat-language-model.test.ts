@@ -342,4 +342,84 @@ describe("DifyChatLanguageModel", () => {
     expect(capturedOptions.headers["Authorization"]).toBe("Bearer test");
     expect(capturedOptions.headers["Custom-Header"]).toBe("custom-value");
   });
+
+  it("should use default user-id when no user-id is provided", async () => {
+    let capturedRequestBody: any = {};
+
+    const mockFetch = async (url: string, options: any) => {
+      capturedRequestBody = JSON.parse(options.body);
+      return {
+        ok: true,
+        headers: new Map([["Content-Type", "application/json"]]),
+        text: async () =>
+          JSON.stringify({
+            id: "id1",
+            answer: "Hello world",
+            task_id: "task1",
+            conversation_id: "conv1",
+            message_id: "msg1",
+            metadata: {
+              usage: {
+                prompt_tokens: 5,
+                completion_tokens: 7,
+                total_tokens: 12,
+              },
+            },
+          }),
+        status: 200,
+      };
+    };
+
+    const model = makeModel({ fetch: mockFetch });
+    await model.doGenerate({
+      messages: [{ role: "user", content: "Hi" }],
+      headers: {}, // No user-id provided
+      inputFormat: "messages",
+      mode: { type: "regular" },
+      prompt: [],
+    });
+
+    // Verify that the default user-id is used
+    expect(capturedRequestBody.user).toBe("you_should_pass_user-id");
+  });
+
+  it("should use provided user-id when explicitly set", async () => {
+    let capturedRequestBody: any = {};
+
+    const mockFetch = async (url: string, options: any) => {
+      capturedRequestBody = JSON.parse(options.body);
+      return {
+        ok: true,
+        headers: new Map([["Content-Type", "application/json"]]),
+        text: async () =>
+          JSON.stringify({
+            id: "id1",
+            answer: "Hello world",
+            task_id: "task1",
+            conversation_id: "conv1",
+            message_id: "msg1",
+            metadata: {
+              usage: {
+                prompt_tokens: 5,
+                completion_tokens: 7,
+                total_tokens: 12,
+              },
+            },
+          }),
+        status: 200,
+      };
+    };
+
+    const model = makeModel({ fetch: mockFetch });
+    await model.doGenerate({
+      messages: [{ role: "user", content: "Hi" }],
+      headers: { "user-id": "custom-user-123" }, // Explicit user-id provided
+      inputFormat: "messages",
+      mode: { type: "regular" },
+      prompt: [],
+    });
+
+    // Verify that the provided user-id is used instead of default
+    expect(capturedRequestBody.user).toBe("custom-user-123");
+  });
 });
