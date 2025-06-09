@@ -43,14 +43,17 @@ const completionResponseSchema = z.object({
 });
 
 const errorResponseSchema = z.object({
-  code: z.number(),
+  code: z.string(),
   message: z.string(),
-  detail: z.optional(z.record(z.unknown())),
+  status: z.number(),
 });
 
 const difyFailedResponseHandler = createJsonErrorResponseHandler({
   errorSchema: errorResponseSchema,
-  errorToMessage: (data) => `Dify API error: ${data.message}`,
+  errorToMessage: (data) => {
+    console.log("Dify API error:", data);
+    return `Dify API error: ${data.message}`;
+  },
 });
 
 // For TypeScript compatibility

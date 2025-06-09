@@ -275,9 +275,9 @@ describe("DifyChatLanguageModel", () => {
       headers: new Map([["Content-Type", "application/json"]]),
       text: async () =>
         JSON.stringify({
-          code: 400,
+          code: "400",
           message: "Bad Request: Invalid input parameters",
-          detail: { error: "Missing required field" },
+          status: 400,
         }),
       status: 400,
     });
