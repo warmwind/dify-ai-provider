@@ -422,4 +422,110 @@ describe("DifyChatLanguageModel", () => {
     // Verify that the provided user-id is used instead of default
     expect(capturedRequestBody.user).toBe("custom-user-123");
   });
+
+  it("should handle message_end and agent_message events", async () => {
+    // Test both message_end (finish event) and agent_message (text-delta event)
+    const mockResponseText =
+      `data: {"event":"agent_message","answer":"Agent response","id":"agent1","conversation_id":"conv1","message_id":"msg1"}\n\n` +
+      `data: {"event":"message_end","id":"msg1","metadata":{"usage":{"prompt_tokens":10,"completion_tokens":25,"total_tokens":35}},"conversation_id":"conv1","message_id":"msg1"}\n\n`;
+
+    const mockFetch = createMockFetch({
+      ok: true,
+      headers: new Map([["Content-Type", "text/event-stream"]]),
+      body: new ReadableStream({
+        start(controller) {
+          const encoder = new TextEncoder();
+          controller.enqueue(encoder.encode(mockResponseText));
+          controller.close();
+        },
+      }),
+      status: 200,
+    });
+
+    const model = makeModel({ fetch: mockFetch });
+    const { stream: resultStream } = await model.doStream({
+      messages: [{ role: "user", content: "Hi" }],
+      headers: {},
+      inputFormat: "messages",
+      mode: { type: "regular" },
+      prompt: [],
+    });
+
+    const parts: any[] = [];
+    const reader = resultStream.getReader();
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      parts.push(value);
+    }
+
+    // Verify agent_message produces text-delta
+    const textDeltaPart = parts.find((p) => p.type === "text-delta");
+    expect(textDeltaPart).toBeDefined();
+    expect(textDeltaPart?.textDelta).toBe("Agent response");
+
+    // Verify agent_message produces response-metadata
+    const metadataPart = parts.find((p) => p.type === "response-metadata");
+    expect(metadataPart).toBeDefined();
+    expect(metadataPart?.id).toBe("agent1");
+
+    // Verify message_end produces finish event
+    const finishPart = parts.find((p) => p.type === "finish");
+    expect(finishPart).toBeDefined();
+    expect(finishPart?.finishReason).toBe("stop");
+    expect(finishPart?.providerMetadata?.difyWorkflowData?.conversationId).toBe(
+      "conv1"
+    );
+    expect(finishPart?.providerMetadata?.difyWorkflowData?.messageId).toBe(
+      "msg1"
+    );
+    expect(finishPart?.usage?.completionTokens).toBe(0); // message_end doesn't have data.data.total_tokens
+  });
+
+  it("should handle message_end with usage tokens from data field", async () => {
+    // Test message_end event with usage tokens in data.total_tokens (like workflow_finished)
+    const mockResponseText = `data: {"event":"message_end","id":"msg1","data":{"total_tokens":50},"metadata":{"usage":{"prompt_tokens":10,"completion_tokens":25,"total_tokens":35}},"conversation_id":"conv1","message_id":"msg1"}\n\n`;
+
+    const mockFetch = createMockFetch({
+      ok: true,
+      headers: new Map([["Content-Type", "text/event-stream"]]),
+      body: new ReadableStream({
+        start(controller) {
+          const encoder = new TextEncoder();
+          controller.enqueue(encoder.encode(mockResponseText));
+          controller.close();
+        },
+      }),
+      status: 200,
+    });
+
+    const model = makeModel({ fetch: mockFetch });
+    const { stream: resultStream } = await model.doStream({
+      messages: [{ role: "user", content: "Hi" }],
+      headers: {},
+      inputFormat: "messages",
+      mode: { type: "regular" },
+      prompt: [],
+    });
+
+    const parts: any[] = [];
+    const reader = resultStream.getReader();
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      parts.push(value);
+    }
+
+    // Verify message_end produces finish event with usage tokens from data field
+    const finishPart = parts.find((p) => p.type === "finish");
+    expect(finishPart).toBeDefined();
+    expect(finishPart?.finishReason).toBe("stop");
+    expect(finishPart?.providerMetadata?.difyWorkflowData?.conversationId).toBe(
+      "conv1"
+    );
+    expect(finishPart?.providerMetadata?.difyWorkflowData?.messageId).toBe(
+      "msg1"
+    );
+    expect(finishPart?.usage?.completionTokens).toBe(50); // Should use data.total_tokens, not metadata.usage.total_tokens
+  });
 });

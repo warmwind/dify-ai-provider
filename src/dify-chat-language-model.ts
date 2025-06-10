@@ -17,8 +17,13 @@ import {
   postJsonToApi,
   type ParseResult,
 } from "@ai-sdk/provider-utils";
-import { z } from "zod";
 import type { DifyChatModelId, DifyChatSettings } from "./dify-chat-settings";
+import {
+  completionResponseSchema,
+  difyStreamEventSchema,
+  errorResponseSchema,
+} from "./dify-chat-schema";
+import type { DifyStreamEvent } from "./dify-chat-schema";
 
 interface ModelConfig {
   provider: string;
@@ -26,27 +31,6 @@ interface ModelConfig {
   headers: () => Record<string, string>;
   fetch?: FetchFunction;
 }
-
-const completionResponseSchema = z.object({
-  id: z.string(),
-  answer: z.string(),
-  task_id: z.string(),
-  conversation_id: z.string(),
-  message_id: z.string(),
-  metadata: z.object({
-    usage: z.object({
-      completion_tokens: z.number(),
-      prompt_tokens: z.number(),
-      total_tokens: z.number(),
-    }),
-  }),
-});
-
-const errorResponseSchema = z.object({
-  code: z.string(),
-  message: z.string(),
-  status: z.number(),
-});
 
 const difyFailedResponseHandler = createJsonErrorResponseHandler({
   errorSchema: errorResponseSchema,
@@ -64,117 +48,6 @@ interface ExtendedLanguageModelV1CallOptions
     content: string | Array<string | { type: string; [key: string]: any }>;
   }>;
 }
-
-// Define a base schema with common fields that all events might have
-const difyStreamEventBase = z
-  .object({
-    event: z.string(),
-    conversation_id: z.string().optional(),
-    message_id: z.string().optional(),
-    task_id: z.string().optional(),
-    created_at: z.number().optional(),
-  })
-  .passthrough();
-
-// Create schemas for specific event types
-const workflowStartedSchema = difyStreamEventBase.extend({
-  event: z.literal("workflow_started"),
-  workflow_run_id: z.string(),
-  data: z
-    .object({
-      id: z.string(),
-      workflow_id: z.string(),
-      created_at: z.number(),
-    })
-    .passthrough(),
-});
-
-const workflowFinishedSchema = difyStreamEventBase.extend({
-  event: z.literal("workflow_finished"),
-  workflow_run_id: z.string(),
-  data: z
-    .object({
-      id: z.string(),
-      workflow_id: z.string(),
-      total_tokens: z.number().optional(),
-      created_at: z.number(),
-    })
-    .passthrough(),
-});
-
-const nodeStartedSchema = difyStreamEventBase.extend({
-  event: z.literal("node_started"),
-  workflow_run_id: z.string(),
-  data: z
-    .object({
-      id: z.string(),
-      node_id: z.string(),
-      node_type: z.string(),
-    })
-    .passthrough(),
-});
-
-const nodeFinishedSchema = difyStreamEventBase.extend({
-  event: z.literal("node_finished"),
-  workflow_run_id: z.string(),
-  data: z
-    .object({
-      id: z.string(),
-      node_id: z.string(),
-      node_type: z.string(),
-    })
-    .passthrough(),
-});
-
-const messageSchema = difyStreamEventBase.extend({
-  event: z.literal("message"),
-  id: z.string().optional(),
-  answer: z.string(),
-  from_variable_selector: z.array(z.string()).optional(),
-});
-
-const messageEndSchema = difyStreamEventBase.extend({
-  event: z.literal("message_end"),
-  id: z.string(),
-  metadata: z
-    .object({
-      usage: z
-        .object({
-          prompt_tokens: z.number(),
-          completion_tokens: z.number(),
-          total_tokens: z.number(),
-        })
-        .passthrough(),
-    })
-    .passthrough(),
-  files: z.array(z.unknown()).optional(),
-});
-
-const ttsMessageSchema = difyStreamEventBase.extend({
-  event: z.literal("tts_message"),
-  audio: z.string(),
-});
-
-const ttsMessageEndSchema = difyStreamEventBase.extend({
-  event: z.literal("tts_message_end"),
-  audio: z.string(),
-});
-
-// Combine all schemas with discriminatedUnion
-const difyStreamEventSchema = z
-  .discriminatedUnion("event", [
-    workflowStartedSchema,
-    workflowFinishedSchema,
-    nodeStartedSchema,
-    nodeFinishedSchema,
-    messageSchema,
-    messageEndSchema,
-    ttsMessageSchema,
-    ttsMessageEndSchema,
-  ])
-  .or(difyStreamEventBase); // Fallback for any other event types
-
-type DifyStreamEvent = z.infer<typeof difyStreamEventSchema>;
 
 export class DifyChatLanguageModel implements LanguageModelV1 {
   readonly specificationVersion = "v1";
@@ -295,7 +168,8 @@ export class DifyChatLanguageModel implements LanguageModelV1 {
 
             // Handle known event types
             switch (data.event) {
-              case "workflow_finished": {
+              case "workflow_finished":
+              case "message_end": {
                 // Add block scope to prevent variable leakage
                 let totalTokens = 0;
 
@@ -328,7 +202,8 @@ export class DifyChatLanguageModel implements LanguageModelV1 {
                 break;
               }
 
-              case "message": {
+              case "message":
+              case "agent_message": {
                 // Type guard for answer property
                 if ("answer" in data && typeof data.answer === "string") {
                   controller.enqueue({
