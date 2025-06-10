@@ -295,7 +295,8 @@ export class DifyChatLanguageModel implements LanguageModelV1 {
 
             // Handle known event types
             switch (data.event) {
-              case "workflow_finished": {
+              case "workflow_finished":
+              case 'message_end': {
                 // Add block scope to prevent variable leakage
                 let totalTokens = 0;
 
@@ -328,7 +329,8 @@ export class DifyChatLanguageModel implements LanguageModelV1 {
                 break;
               }
 
-              case "message": {
+              case "message":
+              case 'agent_message': {
                 // Type guard for answer property
                 if ("answer" in data && typeof data.answer === "string") {
                   controller.enqueue({
