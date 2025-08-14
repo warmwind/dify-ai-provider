@@ -33,3 +33,7 @@ coverage
 
 # Test files
 __snapshots__/
+
+CLAUDE.md
+.claude
+temp-test

@@ -41,17 +41,15 @@ describe("DifyChatLanguageModel", () => {
 
     const model = makeModel({ fetch: mockFetch });
     const result = await model.doGenerate({
-      messages: [{ role: "user", content: "Hi" }],
-      headers: {},
-      inputFormat: "messages",
-      mode: { type: "regular" },
-      prompt: [],
-    });
+      prompt: [{ role: "user", content: [{ type: "text", text: "Hi" }] }],
+    } as any);
 
     // Validate important fields without using snapshot
-    expect(result.text).toBe("Hello world");
-    expect(result.usage.promptTokens).toBe(5);
-    expect(result.usage.completionTokens).toBe(7);
+    expect(result.content).toEqual([{ type: "text", text: "Hello world" }]);
+    expect(result.usage.inputTokens).toBe(5);
+    expect(result.usage.outputTokens).toBe(7);
+    expect(result.usage.totalTokens).toBe(12);
+    expect(result.warnings).toEqual([]);
     expect(result.providerMetadata).toBeDefined();
     expect(result.providerMetadata?.difyWorkflowData).toBeDefined();
     expect(result.providerMetadata?.difyWorkflowData?.conversationId).toBe(
@@ -83,12 +81,8 @@ describe("DifyChatLanguageModel", () => {
 
     const model = makeModel({ fetch: mockFetch });
     const { stream: resultStream } = await model.doStream({
-      messages: [{ role: "user", content: "Hi" }],
-      headers: {},
-      inputFormat: "messages",
-      mode: { type: "regular" },
-      prompt: [],
-    });
+      prompt: [{ role: "user", content: [{ type: "text", text: "Hi" }] }],
+    } as any);
 
     const parts: any[] = [];
     const reader = resultStream.getReader();
@@ -101,8 +95,8 @@ describe("DifyChatLanguageModel", () => {
     // Check we have text-delta parts
     const textDeltaParts = parts.filter((p) => p.type === "text-delta");
     expect(textDeltaParts.length).toBe(2);
-    expect(textDeltaParts[0].textDelta).toBe("Hel");
-    expect(textDeltaParts[1].textDelta).toBe("lo");
+    expect(textDeltaParts[0].delta).toBe("Hel");
+    expect(textDeltaParts[1].delta).toBe("lo");
 
     // Check finish part
     const finishPart = parts.find((p) => p.type === "finish");
@@ -115,7 +109,7 @@ describe("DifyChatLanguageModel", () => {
     expect(finishPart?.providerMetadata?.difyWorkflowData?.messageId).toBe(
       "msg1"
     );
-    expect(finishPart?.usage?.completionTokens).toBe(42);
+    expect(finishPart?.usage?.outputTokens).toBe(42);
   });
 
   it("should handle workflow events in streaming mode", async () => {
@@ -143,12 +137,8 @@ describe("DifyChatLanguageModel", () => {
 
     const model = makeModel({ fetch: mockFetch });
     const { stream: resultStream } = await model.doStream({
-      messages: [{ role: "user", content: "Hi" }],
-      headers: {},
-      inputFormat: "messages",
-      mode: { type: "regular" },
-      prompt: [],
-    });
+      prompt: [{ role: "user", content: [{ type: "text", text: "Hi" }] }],
+    } as any);
 
     const parts: any[] = [];
     const reader = resultStream.getReader();
@@ -161,7 +151,7 @@ describe("DifyChatLanguageModel", () => {
     // Verify we get text delta from message event
     const textDeltaPart = parts.find((p) => p.type === "text-delta");
     expect(textDeltaPart).toBeDefined();
-    expect(textDeltaPart?.textDelta).toBe("Hello");
+    expect(textDeltaPart?.delta).toBe("Hello");
 
     // Verify finish part from workflow_finished event
     const finishPart = parts.find((p) => p.type === "finish");
@@ -172,7 +162,7 @@ describe("DifyChatLanguageModel", () => {
     expect(finishPart?.providerMetadata?.difyWorkflowData?.messageId).toBe(
       "msg1"
     );
-    expect(finishPart?.usage?.completionTokens).toBe(15);
+    expect(finishPart?.usage?.outputTokens).toBe(15);
   });
 
   it("should ignore non-handled event types in streaming mode", async () => {
@@ -199,12 +189,8 @@ describe("DifyChatLanguageModel", () => {
 
     const model = makeModel({ fetch: mockFetch });
     const { stream: resultStream } = await model.doStream({
-      messages: [{ role: "user", content: "Hi" }],
-      headers: {},
-      inputFormat: "messages",
-      mode: { type: "regular" },
-      prompt: [],
-    });
+      prompt: [{ role: "user", content: [{ type: "text", text: "Hi" }] }],
+    } as any);
 
     const parts: any[] = [];
     const reader = resultStream.getReader();
@@ -217,7 +203,7 @@ describe("DifyChatLanguageModel", () => {
     // Check text-delta parts
     const textDeltaPart = parts.find((p) => p.type === "text-delta");
     expect(textDeltaPart).toBeDefined();
-    expect(textDeltaPart?.textDelta).toBe("Text response");
+    expect(textDeltaPart?.delta).toBe("Text response");
 
     // Check finish part
     const finishPart = parts.find((p) => p.type === "finish");
@@ -252,12 +238,8 @@ describe("DifyChatLanguageModel", () => {
     // when receiving malformed data
     await expect(async () => {
       const { stream: resultStream } = await model.doStream({
-        messages: [{ role: "user", content: "Hi" }],
-        headers: {},
-        inputFormat: "messages",
-        mode: { type: "regular" },
-        prompt: [],
-      });
+        prompt: [{ role: "user", content: [{ type: "text", text: "Hi" }] }],
+      } as any);
 
       const reader = resultStream.getReader();
 
@@ -286,12 +268,8 @@ describe("DifyChatLanguageModel", () => {
     let error: any = undefined;
     try {
       await model.doGenerate({
-        messages: [{ role: "user", content: "Hi" }],
-        headers: {},
-        inputFormat: "messages",
-        mode: { type: "regular" },
-        prompt: [],
-      });
+        prompt: [{ role: "user", content: [{ type: "text", text: "Hi" }] }],
+      } as any);
     } catch (e) {
       error = e;
     }
@@ -332,12 +310,9 @@ describe("DifyChatLanguageModel", () => {
 
     const model = makeModel({ fetch: mockFetch });
     await model.doGenerate({
-      messages: [{ role: "user", content: "Hi" }],
+      prompt: [{ role: "user", content: [{ type: "text", text: "Hi" }] }],
       headers: { "Custom-Header": "custom-value" },
-      inputFormat: "messages",
-      mode: { type: "regular" },
-      prompt: [],
-    });
+    } as any);
 
     expect(capturedOptions.headers["Authorization"]).toBe("Bearer test");
     expect(capturedOptions.headers["Custom-Header"]).toBe("custom-value");
@@ -372,12 +347,9 @@ describe("DifyChatLanguageModel", () => {
 
     const model = makeModel({ fetch: mockFetch });
     await model.doGenerate({
-      messages: [{ role: "user", content: "Hi" }],
+      prompt: [{ role: "user", content: [{ type: "text", text: "Hi" }] }],
       headers: {}, // No user-id provided
-      inputFormat: "messages",
-      mode: { type: "regular" },
-      prompt: [],
-    });
+    } as any);
 
     // Verify that the default user-id is used
     expect(capturedRequestBody.user).toBe("you_should_pass_user-id");
@@ -412,12 +384,9 @@ describe("DifyChatLanguageModel", () => {
 
     const model = makeModel({ fetch: mockFetch });
     await model.doGenerate({
-      messages: [{ role: "user", content: "Hi" }],
+      prompt: [{ role: "user", content: [{ type: "text", text: "Hi" }] }],
       headers: { "user-id": "custom-user-123" }, // Explicit user-id provided
-      inputFormat: "messages",
-      mode: { type: "regular" },
-      prompt: [],
-    });
+    } as any);
 
     // Verify that the provided user-id is used instead of default
     expect(capturedRequestBody.user).toBe("custom-user-123");
@@ -444,12 +413,8 @@ describe("DifyChatLanguageModel", () => {
 
     const model = makeModel({ fetch: mockFetch });
     const { stream: resultStream } = await model.doStream({
-      messages: [{ role: "user", content: "Hi" }],
-      headers: {},
-      inputFormat: "messages",
-      mode: { type: "regular" },
-      prompt: [],
-    });
+      prompt: [{ role: "user", content: [{ type: "text", text: "Hi" }] }],
+    } as any);
 
     const parts: any[] = [];
     const reader = resultStream.getReader();
@@ -462,7 +427,7 @@ describe("DifyChatLanguageModel", () => {
     // Verify agent_message produces text-delta
     const textDeltaPart = parts.find((p) => p.type === "text-delta");
     expect(textDeltaPart).toBeDefined();
-    expect(textDeltaPart?.textDelta).toBe("Agent response");
+    expect(textDeltaPart?.delta).toBe("Agent response");
 
     // Verify agent_message produces response-metadata
     const metadataPart = parts.find((p) => p.type === "response-metadata");
@@ -479,7 +444,7 @@ describe("DifyChatLanguageModel", () => {
     expect(finishPart?.providerMetadata?.difyWorkflowData?.messageId).toBe(
       "msg1"
     );
-    expect(finishPart?.usage?.completionTokens).toBe(0); // message_end doesn't have data.data.total_tokens
+    expect(finishPart?.usage?.outputTokens).toBe(0); // message_end doesn't have data.data.total_tokens
   });
 
   it("should handle message_end with usage tokens from data field", async () => {
@@ -501,12 +466,8 @@ describe("DifyChatLanguageModel", () => {
 
     const model = makeModel({ fetch: mockFetch });
     const { stream: resultStream } = await model.doStream({
-      messages: [{ role: "user", content: "Hi" }],
-      headers: {},
-      inputFormat: "messages",
-      mode: { type: "regular" },
-      prompt: [],
-    });
+      prompt: [{ role: "user", content: [{ type: "text", text: "Hi" }] }],
+    } as any);
 
     const parts: any[] = [];
     const reader = resultStream.getReader();
@@ -526,6 +487,6 @@ describe("DifyChatLanguageModel", () => {
     expect(finishPart?.providerMetadata?.difyWorkflowData?.messageId).toBe(
       "msg1"
     );
-    expect(finishPart?.usage?.completionTokens).toBe(50); // Should use data.total_tokens, not metadata.usage.total_tokens
+    expect(finishPart?.usage?.outputTokens).toBe(50); // Should use data.total_tokens, not metadata.usage.total_tokens
   });
 });
