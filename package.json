@@ -4,10 +4,16 @@
   "description": "Dify provider for Vercel AI SDK",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch",
-    "test": "vitest run"
+    "test": "vitest run",
+    "prepublishOnly": "npm run build"
   },
   "exports": {
     "./package.json": "./package.json",
@@ -26,7 +32,7 @@
   "author": "Oscar Jiang <pengj0520@gmail.com>",
   "repository": {
     "type": "git",
-    "url": "https://github.com/warmwind/dify-ai-provider"
+    "url": "git+https://github.com/warmwind/dify-ai-provider.git"
   },
   "homepage": "https://github.com/warmwind/dify-ai-provider#readme",
   "bugs": {
@@ -35,7 +41,6 @@
   "publishConfig": {
     "access": "public"
   },
-  "prepublishOnly": "npm run build",
   "license": "MIT",
   "dependencies": {
     "@ai-sdk/provider": "^2.0.0",
