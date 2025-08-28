@@ -281,7 +281,7 @@ export class DifyChatLanguageModel implements LanguageModelV2 {
     const hasAttachments =
       Array.isArray(latestMessage.content) &&
       latestMessage.content.some((part) => {
-        return (typeof part !== "string" && part !== null && typeof part === "object" && "type" in part && part.type === "file")
+        return typeof part !== "string" && part !== null && typeof part === "object" && "type" in part && part.type === "file";
       });
 
     if (hasAttachments) {
