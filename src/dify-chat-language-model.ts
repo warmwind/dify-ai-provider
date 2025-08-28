@@ -187,7 +187,6 @@ export class DifyChatLanguageModel implements LanguageModelV2 {
                   totalTokens = data.data.total_tokens;
                 }
                 if (isActiveText) {
-                  // End current text part if one is active
                   controller.enqueue({
                     type: "text-end",
                     id: "0",
@@ -218,7 +217,6 @@ export class DifyChatLanguageModel implements LanguageModelV2 {
               case "agent_message": {
                 // Type guard for answer property
                 if ("answer" in data && typeof data.answer === "string") {
-                  // Start a new text part if not started yet
                   if (!isActiveText) {
                     isActiveText = true;
                     controller.enqueue({
