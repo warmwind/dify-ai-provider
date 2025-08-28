@@ -44,7 +44,6 @@ const difyFailedResponseHandler = createJsonErrorResponseHandler({
   },
 });
 
-
 export class DifyChatLanguageModel implements LanguageModelV2 {
   readonly specificationVersion = "v2" as const;
   readonly modelId: string;
@@ -94,7 +93,7 @@ export class DifyChatLanguageModel implements LanguageModelV2 {
 
     const typedData = data as CompletionResponse;
     const content: LanguageModelV2Content[] = [];
-    
+
     // Add text content if available
     if (typedData.answer) {
       content.push({
@@ -149,6 +148,7 @@ export class DifyChatLanguageModel implements LanguageModelV2 {
     let conversationId: string | undefined;
     let messageId: string | undefined;
     let taskId: string | undefined;
+    let isActiveText = false;
 
     return {
       stream: responseStream.pipeThrough(
@@ -186,6 +186,14 @@ export class DifyChatLanguageModel implements LanguageModelV2 {
                 ) {
                   totalTokens = data.data.total_tokens;
                 }
+                if (isActiveText) {
+                  // End current text part if one is active
+                  controller.enqueue({
+                    type: "text-end",
+                    id: "0",
+                  });
+                  isActiveText = false;
+                }
 
                 controller.enqueue({
                   type: "finish",
@@ -210,9 +218,18 @@ export class DifyChatLanguageModel implements LanguageModelV2 {
               case "agent_message": {
                 // Type guard for answer property
                 if ("answer" in data && typeof data.answer === "string") {
+                  // Start a new text part if not started yet
+                  if (!isActiveText) {
+                    isActiveText = true;
+                    controller.enqueue({
+                      type: "text-start",
+                      id: "0",
+                    });
+                  }
+
                   controller.enqueue({
                     type: "text-delta",
-                    id: generateId(),
+                    id: "0",
                     delta: data.answer,
                   });
 
@@ -266,7 +283,13 @@ export class DifyChatLanguageModel implements LanguageModelV2 {
     const hasAttachments =
       Array.isArray(latestMessage.content) &&
       latestMessage.content.some((part) => {
-        return typeof part !== "string" && part !== null && typeof part === "object" && "type" in part && part.type === "file";
+        return (
+          typeof part !== "string" &&
+          part !== null &&
+          typeof part === "object" &&
+          "type" in part &&
+          part.type === "file"
+        );
       });
 
     if (hasAttachments) {
@@ -287,7 +310,13 @@ export class DifyChatLanguageModel implements LanguageModelV2 {
         .map((part) => {
           if (typeof part === "string") {
             return part;
-          } else if (typeof part === "object" && part !== null && "type" in part && part.type === "text" && "text" in part) {
+          } else if (
+            typeof part === "object" &&
+            part !== null &&
+            "type" in part &&
+            part.type === "text" &&
+            "text" in part
+          ) {
             return part.text;
           }
           return "";
@@ -313,6 +342,4 @@ export class DifyChatLanguageModel implements LanguageModelV2 {
       user: userId,
     };
   }
-
-
 }
