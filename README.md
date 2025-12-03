@@ -177,4 +177,4 @@ Creates a Dify chat model instance.
 ## Documentation
 
 - [Vercel AI SDK documentation](https://sdk.vercel.ai/docs/introduction)
-- [Dify API documentation](https://docs.dify.ai/guides/application-publishing/developing-with-apis)
+- [Dify API documentation](https://docs.dify.ai/versions/legacy/en/user-guide/application-publishing/developing-with-apis)
