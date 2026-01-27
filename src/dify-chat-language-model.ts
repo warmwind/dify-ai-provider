@@ -222,6 +222,17 @@ export class DifyChatLanguageModel implements LanguageModelV2 {
                     controller.enqueue({
                       type: "text-start",
                       id: "0",
+                      ...(conversationId || messageId || taskId
+                        ? {
+                            providerMetadata: {
+                              difyWorkflowData: {
+                                ...(conversationId ? { conversationId: conversationId as JSONValue } : {}),
+                                ...(messageId ? { messageId: messageId as JSONValue } : {}),
+                                ...(taskId ? { taskId: taskId as JSONValue } : {}),
+                              },
+                            },
+                          }
+                        : {}),
                     });
                   }
 
@@ -229,6 +240,17 @@ export class DifyChatLanguageModel implements LanguageModelV2 {
                     type: "text-delta",
                     id: "0",
                     delta: data.answer,
+                    ...(conversationId || messageId || taskId
+                      ? {
+                          providerMetadata: {
+                            difyWorkflowData: {
+                              ...(conversationId ? { conversationId: conversationId as JSONValue } : {}),
+                              ...(messageId ? { messageId: messageId as JSONValue } : {}),
+                              ...(taskId ? { taskId: taskId as JSONValue } : {}),
+                            },
+                          },
+                        }
+                      : {}),
                   });
 
                   // Type guard for id property
