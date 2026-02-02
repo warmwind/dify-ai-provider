@@ -14,17 +14,44 @@ import {
   createJsonResponseHandler,
   FetchFunction,
   generateId,
-  postJsonToApi,
   type ParseResult,
+  postJsonToApi,
 } from "@ai-sdk/provider-utils";
-import type { DifyChatModelId, DifyChatSettings } from "./dify-chat-settings";
-import {
-  completionResponseSchema,
-  difyStreamEventSchema,
-  errorResponseSchema,
-} from "./dify-chat-schema";
-import type { DifyStreamEvent } from "./dify-chat-schema";
-import type { z } from "zod";
+import {defaultLogger, type DifyChatModelId, type DifyChatSettings, type Logger} from "./dify-chat-settings";
+import type {DifyStreamEvent} from "./dify-chat-schema";
+import {completionResponseSchema, difyStreamEventSchema, errorResponseSchema} from "./dify-chat-schema";
+import type {z} from "zod";
+import {extractFileAttachments, formatToolsPrompt, parseToolCalls, ThinkTagParser} from "./stream-parser";
+
+function formatSystemPrompt(raw: string): string {
+  if (!raw) return "";
+  const trimmed = raw.trim();
+
+  // Detect structured prompt format
+  const envTagMatch = trimmed.match(/<env>([\s\S]*?)<\/env>/);
+  const dirsTagMatch = trimmed.match(/<directories>([\s\S]*?)<\/directories>/);
+  const identityMatch = trimmed.match(/^You are\b[^.]*\./m);
+
+  if (envTagMatch || identityMatch || dirsTagMatch) {
+    const parts: string[] = [];
+
+    if (identityMatch) {
+      parts.push(identityMatch[0]);
+    }
+
+    if (envTagMatch) {
+      parts.push(`<env>${envTagMatch[1]}</env>`);
+    }
+
+    if (dirsTagMatch) {
+      parts.push(`<directories>${dirsTagMatch[1]}</directories>`);
+    }
+
+    return parts.join("\n\n\n\n");
+  }
+
+  return trimmed;
+}
 
 type CompletionResponse = z.infer<typeof completionResponseSchema>;
 type ErrorResponse = z.infer<typeof errorResponseSchema>;
@@ -36,13 +63,23 @@ interface ModelConfig {
   fetch?: FetchFunction;
 }
 
-const difyFailedResponseHandler = createJsonErrorResponseHandler({
-  errorSchema: errorResponseSchema as any,
-  errorToMessage: (data: ErrorResponse) => {
-    console.log("Dify API error:", data);
-    return `Dify API error: ${data.message}`;
-  },
-});
+/** Content part for multimodal messages (text or tool-result). */
+interface MessageContentPart {
+  type?: string;
+  text?: string;
+  toolName?: string;
+  output?: unknown;
+  result?: unknown;
+  content?: unknown;
+  providerMetadata?: { difyWorkflowData?: { conversationId?: string } };
+  callProviderMetadata?: { difyWorkflowData?: { conversationId?: string } };
+}
+
+interface Message {
+  role: string;
+  content: string | MessageContentPart[];
+  [key: string]: unknown;
+}
 
 export class DifyChatLanguageModel implements LanguageModelV2 {
   readonly specificationVersion = "v2" as const;
@@ -52,6 +89,7 @@ export class DifyChatLanguageModel implements LanguageModelV2 {
   private readonly generateId: () => string;
   private readonly chatMessagesEndpoint: string;
   private readonly config: ModelConfig;
+  private readonly logger?: Logger;
 
   constructor(
     modelId: DifyChatModelId,
@@ -62,11 +100,22 @@ export class DifyChatLanguageModel implements LanguageModelV2 {
     this.config = config;
     this.generateId = generateId;
     this.chatMessagesEndpoint = `${this.config.baseURL}/chat-messages`;
+    this.logger = settings.logger === false ? undefined : (settings.logger ?? defaultLogger);
 
     // Make sure we set a default response mode
     if (!this.settings.responseMode) {
       this.settings.responseMode = "streaming";
     }
+  }
+
+  private createErrorHandler() {
+    return createJsonErrorResponseHandler({
+      errorSchema: errorResponseSchema as any,
+      errorToMessage: (data: ErrorResponse) => {
+        this.logger?.error("Dify API error", data);
+        return `Dify API error: ${data.message}`;
+      },
+    });
   }
 
   get provider(): string {
@@ -77,14 +126,21 @@ export class DifyChatLanguageModel implements LanguageModelV2 {
     options: LanguageModelV2CallOptions
   ): Promise<Awaited<ReturnType<LanguageModelV2["doGenerate"]>>> {
     const { abortSignal } = options;
-    const requestBody = this.getRequestBody(options);
+    const { body: requestBody, toolNames, requestHeaders } = await this.getRequestBody(options);
+
+    // Force blocking mode for doGenerate unless explicitly handled otherwise
+    const body = { ...requestBody, response_mode: "blocking" };
+
+    if (this.settings.logMessages) {
+      this.logger?.info("", { body });
+    }
 
     const { responseHeaders, value: data } = await postJsonToApi({
       url: this.chatMessagesEndpoint,
-      headers: combineHeaders(this.config.headers(), options.headers),
-      body: requestBody,
+      headers: combineHeaders(this.config.headers(), requestHeaders ?? options.headers),
+      body,
       abortSignal,
-      failedResponseHandler: difyFailedResponseHandler,
+      failedResponseHandler: this.createErrorHandler(),
       successfulResponseHandler: createJsonResponseHandler(
         completionResponseSchema as any
       ),
@@ -92,19 +148,34 @@ export class DifyChatLanguageModel implements LanguageModelV2 {
     });
 
     const typedData = data as CompletionResponse;
+    if (this.settings.logMessages) {
+      this.logger?.info("", { answer: typedData.answer, conversation_id: typedData.conversation_id });
+    }
     const content: LanguageModelV2Content[] = [];
 
-    // Add text content if available
+    // Parse tool calls from answer text
     if (typedData.answer) {
-      content.push({
-        type: "text",
-        text: typedData.answer,
-      });
+      const { toolCalls, cleanText } = parseToolCalls(typedData.answer, toolNames, this.generateId);
+
+      if (cleanText) {
+        content.push({ type: "text", text: cleanText });
+      }
+
+      for (const tc of toolCalls) {
+        content.push({
+          type: "tool-call",
+          toolCallId: tc.id,
+          toolName: tc.name,
+          input: tc.input,
+        });
+      }
     }
+
+    const hasToolCalls = content.some(c => c.type === "tool-call");
 
     return {
       content,
-      finishReason: "stop" as LanguageModelV2FinishReason,
+      finishReason: (hasToolCalls ? "tool-calls" : "stop") as LanguageModelV2FinishReason,
       usage: {
         inputTokens: typedData.metadata.usage.prompt_tokens,
         outputTokens: typedData.metadata.usage.completion_tokens,
@@ -117,7 +188,7 @@ export class DifyChatLanguageModel implements LanguageModelV2 {
           messageId: typedData.message_id as JSONValue,
         },
       },
-      request: { body: JSON.stringify(requestBody) },
+      request: { body: JSON.stringify(body) },
       response: {
         id: typedData.id,
         timestamp: new Date(),
@@ -129,15 +200,22 @@ export class DifyChatLanguageModel implements LanguageModelV2 {
   async doStream(
     options: LanguageModelV2CallOptions
   ): Promise<Awaited<ReturnType<LanguageModelV2["doStream"]>>> {
+    if (this.settings.logMessages) {
+      this.logger?.info("", { options });
+    }
     const { abortSignal } = options;
-    const requestBody = this.getRequestBody(options);
+    const { body: requestBody, toolNames, requestHeaders } = await this.getRequestBody(options);
     const body = { ...requestBody, response_mode: "streaming" };
+
+    if (this.settings.logMessages) {
+      this.logger?.info("", { body });
+    }
 
     const { responseHeaders, value: responseStream } = await postJsonToApi({
       url: this.chatMessagesEndpoint,
-      headers: combineHeaders(this.config.headers(), options.headers),
+      headers: combineHeaders(this.config.headers(), requestHeaders ?? options.headers),
       body,
-      failedResponseHandler: difyFailedResponseHandler,
+      failedResponseHandler: this.createErrorHandler(),
       successfulResponseHandler: createEventSourceResponseHandler(
         difyStreamEventSchema as any
       ),
@@ -149,6 +227,48 @@ export class DifyChatLanguageModel implements LanguageModelV2 {
     let messageId: string | undefined;
     let taskId: string | undefined;
     let isActiveText = false;
+    let isActiveReasoning = false;
+    const thinkParser = new ThinkTagParser();
+    const genId = this.generateId;
+    const logger = this.logger;
+    const logMessages = this.settings.logMessages;
+
+    function buildDifyMetadata() {
+      const meta: Record<string, JSONValue> = {};
+      if (conversationId) meta.conversationId = conversationId as JSONValue;
+      if (messageId) meta.messageId = messageId as JSONValue;
+      if (taskId) meta.taskId = taskId as JSONValue;
+      return Object.keys(meta).length ? { providerMetadata: { difyWorkflowData: meta } } : {};
+    }
+
+    function emitSegments(
+      segments: Array<{ type: string; content: string }>,
+      controller: TransformStreamDefaultController<LanguageModelV2StreamPart>
+    ) {
+      for (const seg of segments) {
+        if (seg.type === "reasoning") {
+          if (isActiveText) {
+            controller.enqueue({ type: "text-end", id: "0", ...buildDifyMetadata() });
+            isActiveText = false;
+          }
+          if (!isActiveReasoning) {
+            isActiveReasoning = true;
+            controller.enqueue({ type: "reasoning-start", id: "r0", ...buildDifyMetadata() });
+          }
+          controller.enqueue({ type: "reasoning-delta", id: "r0", delta: seg.content, ...buildDifyMetadata() });
+        } else if (seg.content) {
+          if (isActiveReasoning) {
+            controller.enqueue({ type: "reasoning-end", id: "r0", ...buildDifyMetadata() });
+            isActiveReasoning = false;
+          }
+          if (!isActiveText) {
+            isActiveText = true;
+            controller.enqueue({ type: "text-start", id: "0", ...buildDifyMetadata() });
+          }
+          controller.enqueue({ type: "text-delta", id: "0", delta: seg.content, ...buildDifyMetadata() });
+        }
+      }
+    }
 
     return {
       stream: responseStream.pipeThrough(
@@ -158,11 +278,16 @@ export class DifyChatLanguageModel implements LanguageModelV2 {
         >({
           transform(chunk, controller) {
             if (!chunk.success) {
+              logger?.error("Dify stream parse error", { error: String(chunk.error) });
               controller.enqueue({ type: "error", error: chunk.error });
               return;
             }
 
             const data = chunk.value;
+            
+            if (logMessages) {
+              logger?.info("", { data });
+            }
 
             // Store conversation/message IDs for metadata
             if (data.conversation_id) conversationId = data.conversation_id;
@@ -173,41 +298,86 @@ export class DifyChatLanguageModel implements LanguageModelV2 {
             switch (data.event) {
               case "workflow_finished":
               case "message_end": {
-                // Add block scope to prevent variable leakage
+                let inputTokens = 0;
+                let outputTokens = 0;
                 let totalTokens = 0;
 
-                // Type guard for data.data
-                if (
-                  "data" in data &&
-                  data.data &&
-                  typeof data.data === "object" &&
-                  "total_tokens" in data.data &&
-                  typeof data.data.total_tokens === "number"
-                ) {
-                  totalTokens = data.data.total_tokens;
+                if (data.event === "workflow_finished") {
+                  const dataUsage = (data as any).data || {};
+                  inputTokens = 0;
+                  outputTokens = dataUsage.total_tokens ?? 0;
+                  totalTokens = dataUsage.total_tokens ?? 0;
+                } else {
+                  const usageData = (data as any).metadata?.usage || {};
+                  inputTokens = usageData.prompt_tokens ?? 0;
+                  outputTokens = usageData.completion_tokens ?? 0;
+                  totalTokens = usageData.total_tokens ?? 0;
                 }
+
+                // Use accumulated answer for tool parsing
+                // Remove <think> tags for tool parsing
+                const textWithoutThink = thinkParser.getTextWithoutThink();
+
+                const { toolCalls } = parseToolCalls(textWithoutThink, toolNames, genId);
+                const hasToolCalls = toolCalls.length > 0;
+
+                if (logMessages) {
+                  logger?.info("", { toolCalls });
+                }
+
+                // Flush remaining content from parser
+                emitSegments(thinkParser.flush(), controller);
+
+                if (isActiveReasoning) {
+                  controller.enqueue({ type: "reasoning-end", id: "r0", ...buildDifyMetadata() });
+                  isActiveReasoning = false;
+                }
+
                 if (isActiveText) {
-                  controller.enqueue({
-                    type: "text-end",
-                    id: "0",
-                  });
+                  controller.enqueue({ type: "text-end", id: "0", ...buildDifyMetadata() });
                   isActiveText = false;
+                } else if (!hasToolCalls) {
+                  controller.enqueue({ type: "text-start", id: "0", ...buildDifyMetadata() });
+                  controller.enqueue({ type: "text-end", id: "0", ...buildDifyMetadata() });
+                }
+
+                // Don't emit cleanText here since it was already emitted via stream
+                
+                for (const tc of toolCalls) {
+                  controller.enqueue({
+                    type: "tool-input-start",
+                    id: tc.id,
+                    toolName: tc.name,
+                    ...buildDifyMetadata(),
+                  });
+                  controller.enqueue({
+                    type: "tool-input-delta",
+                    id: tc.id,
+                    delta: tc.input,
+                    ...buildDifyMetadata(),
+                  });
+                  controller.enqueue({
+                    type: "tool-input-end",
+                    id: tc.id,
+                    ...buildDifyMetadata(),
+                  });
+                  controller.enqueue({
+                    type: "tool-call",
+                    toolCallId: tc.id,
+                    toolName: tc.name,
+                    input: tc.input,
+                    ...buildDifyMetadata(),
+                  });
                 }
 
                 controller.enqueue({
                   type: "finish",
-                  finishReason: "stop",
-                  providerMetadata: {
-                    difyWorkflowData: {
-                      conversationId: conversationId as JSONValue,
-                      messageId: messageId as JSONValue,
-                      taskId: taskId as JSONValue,
-                    },
-                  },
+                  finishReason: hasToolCalls ? "tool-calls" : "stop",
+                  ...buildDifyMetadata(),
                   usage: {
-                    inputTokens: 0,
-                    outputTokens: totalTokens,
-                    totalTokens: totalTokens,
+                    inputTokens,
+                    outputTokens,
+                    totalTokens,
                   },
                 });
                 break;
@@ -215,56 +385,50 @@ export class DifyChatLanguageModel implements LanguageModelV2 {
 
               case "message":
               case "agent_message": {
-                // Type guard for answer property
-                if ("answer" in data && typeof data.answer === "string") {
-                  if (!isActiveText) {
-                    isActiveText = true;
-                    controller.enqueue({
-                      type: "text-start",
-                      id: "0",
-                      ...(conversationId || messageId || taskId
-                        ? {
-                            providerMetadata: {
-                              difyWorkflowData: {
-                                ...(conversationId ? { conversationId: conversationId as JSONValue } : {}),
-                                ...(messageId ? { messageId: messageId as JSONValue } : {}),
-                                ...(taskId ? { taskId: taskId as JSONValue } : {}),
-                              },
-                            },
-                          }
-                        : {}),
-                    });
-                  }
+                if ("answer" in data && typeof data.answer === "string" && data.answer) {
+                  emitSegments(thinkParser.feed(data.answer), controller);
 
-                  controller.enqueue({
-                    type: "text-delta",
-                    id: "0",
-                    delta: data.answer,
-                    ...(conversationId || messageId || taskId
-                      ? {
-                          providerMetadata: {
-                            difyWorkflowData: {
-                              ...(conversationId ? { conversationId: conversationId as JSONValue } : {}),
-                              ...(messageId ? { messageId: messageId as JSONValue } : {}),
-                              ...(taskId ? { taskId: taskId as JSONValue } : {}),
-                            },
-                          },
-                        }
-                      : {}),
-                  });
-
-                  // Type guard for id property
                   if ("id" in data && typeof data.id === "string") {
-                    controller.enqueue({
-                      type: "response-metadata",
-                      id: data.id,
-                    });
+                    controller.enqueue({ type: "response-metadata", id: data.id });
                   }
                 }
                 break;
               }
 
-              // Ignore other event types
+              // agent_thought events are summaries of agent_message chunks.
+              // Dify sends: agent_thought(empty) → agent_message × N → agent_thought(full) → message_end
+              // The agent_message events already contain all content (including <think> tags),
+              // so agent_thought is redundant and must be ignored to avoid duplicate output.
+              case "agent_thought":
+                break;
+
+              case "message_replace": {
+                if ("answer" in data && typeof data.answer === "string" && data.answer) {
+                  thinkParser.reset(data.answer);
+                  
+                  if (isActiveText) {
+                    controller.enqueue({ type: "text-end", id: "0", ...buildDifyMetadata() });
+                    isActiveText = false;
+                  }
+                  controller.enqueue({ type: "text-start", id: "0", ...buildDifyMetadata() });
+                  controller.enqueue({ type: "text-delta", id: "0", delta: data.answer, ...buildDifyMetadata() });
+                  isActiveText = true;
+                }
+                break;
+              }
+
+              case "message_file":
+              case "ping":
+                break;
+
+              case "error": {
+                const err = data as { message?: string; msg?: string; code?: string; status?: string };
+                const msg = err.message ?? err.msg ?? "Unknown Dify error";
+                const code = err.code ?? err.status ?? "";
+                logger?.error("Dify stream error", { code, message: msg });
+                controller.enqueue({ type: "error", error: new Error(`Dify error${code ? ` (${code})` : ""}: ${msg}`) });
+                break;
+              }
             }
           },
         })
@@ -277,11 +441,13 @@ export class DifyChatLanguageModel implements LanguageModelV2 {
   /**
    * Get the request body for the Dify API
    */
-  private getRequestBody(options: LanguageModelV2CallOptions) {
+  private async getRequestBody(options: LanguageModelV2CallOptions) {
     // In AI SDK v5 LanguageModelV2, messages are in options.prompt
-    const messages = options.prompt || (options as any).messages;
+    const opts = options as LanguageModelV2CallOptions & { messages?: Message[] };
+    const messages = (options.prompt ?? opts.messages) as Message[] | undefined;
 
     if (!messages || !messages.length) {
+      this.logger?.error("No messages provided", { prompt: options.prompt });
       throw new APICallError({
         message: "No messages provided",
         url: this.chatMessagesEndpoint,
@@ -289,65 +455,162 @@ export class DifyChatLanguageModel implements LanguageModelV2 {
       });
     }
 
-    const latestMessage = messages[messages.length - 1];
+    const conversationId = this.findConversationId(options.headers, messages);
+    const query = this.buildQuery(messages, conversationId);
 
-    if (latestMessage.role !== "user") {
+    if (!query) {
+      this.logger?.error("No user message found", { messageCount: messages.length, roles: messages.map(m => m.role) });
       throw new APICallError({
-        message: "The last message must be a user message",
+        message: "No user message found",
         url: this.chatMessagesEndpoint,
-        requestBodyValues: { latestMessageRole: latestMessage.role },
+        requestBodyValues: { messageCount: messages.length },
       });
     }
 
-    // Handle file/image attachments
-    const hasAttachments =
-      Array.isArray(latestMessage.content) &&
-      latestMessage.content.some((part) => {
-        return typeof part !== "string" && part !== null && typeof part === "object" && "type" in part && part.type === "file";
-      });
+    const userId = options.headers?.["user-id"] ?? "you_should_pass_user-id";
 
-    if (hasAttachments) {
-      throw new APICallError({
-        message: "Dify provider does not currently support file attachments",
-        url: this.chatMessagesEndpoint,
-        requestBodyValues: { hasAttachments: true },
-      });
+    // Clean headers by removing handled IDs (do not mutate options.headers)
+    const { "chat-id": _h1, "user-id": _h2, ...cleanHeaders } = options.headers || {};
+
+    // Extract file/image attachments from messages
+    // Note: extractFileAttachments is an external async utility, kept as is.
+    const files = await extractFileAttachments(messages, userId, this.config.baseURL, this.config.headers, this.logger);
+
+    // System Prompt
+    const systemPrompt = this.extractSystemPrompt(messages);
+
+    // Tool config
+    const injectTools = this.settings.injectToolsPrompt !== false;
+    // Always parse tool names to support tool execution even if prompt injection is disabled
+    const { prompt: generatedPrompt, toolNames } = formatToolsPrompt(options.tools);
+    const toolsPrompt = injectTools ? generatedPrompt : "";
+
+    const isNewConversation = !conversationId;
+    const parts = [
+      isNewConversation ? systemPrompt : "",
+      query,
+      isNewConversation ? toolsPrompt : "",
+    ].filter(Boolean);
+    const finalQuery = parts.join("\n\n");
+    const inputs = this.settings.inputs || {};
+
+    const requestBody = {
+      inputs,
+      query: finalQuery,
+      response_mode: this.settings.responseMode,
+      conversation_id: conversationId,
+      user: userId,
+      ...(files.length ? { files } : {}),
+    };
+
+    return {
+      body: requestBody,
+      toolNames,
+      requestHeaders: cleanHeaders,
+    };
+  }
+
+  private findConversationId(headers: Record<string, string | undefined> | undefined, messages: Message[]): string | undefined {
+    // Priority: Header > Last Message Provider Metadata
+    if (headers?.["chat-id"]) {
+      return headers["chat-id"];
     }
 
-    // Extract the query from the latest user message
-    let query = "";
-    if (typeof latestMessage.content === "string") {
-      query = latestMessage.content;
-    } else if (Array.isArray(latestMessage.content)) {
-      // Handle AI SDK v4 format with text objects in content array
-      query = latestMessage.content
-        .map((part) => {
-          if (typeof part === "string") {
-            return part;
-          } else if (typeof part === "object" && part !== null && "type" in part && part.type === "text" && "text" in part) {
-            return part.text;
+    // Iterate backwards to find the most recent conversation context
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const msg = messages[i];
+      if (Array.isArray(msg.content)) {
+        for (const part of msg.content) {
+          const meta = part?.providerMetadata?.difyWorkflowData || part?.callProviderMetadata?.difyWorkflowData;
+          if (meta?.conversationId) {
+            return meta.conversationId as string;
           }
+        }
+      }
+    }
+    return undefined;
+  }
+
+  private buildQuery(messages: Message[], conversationId: string | undefined): string {
+    // Dify expects a single query string.
+    // If conversation exists: only the new user input (+ tool results)
+    // If new conversation: combine all history as context
+
+    let startIndex = 0;
+
+    if (conversationId) {
+      // Existing Conversation: Extract latest interaction
+      // We walk backwards to find the start of the new interaction.
+      startIndex = messages.length;
+
+      for (let i = messages.length - 1; i >= 0; i--) {
+        const msg = messages[i];
+        if (msg.role === "tool") {
+          startIndex = i;
+          continue;
+        }
+        if (msg.role === "user") {
+          startIndex = i;
+          break; // Found the primary user query
+        }
+        // Stop at assistant, system or other roles
+        break;
+      }
+    }
+
+    return messages
+      .slice(startIndex)
+      .filter((msg) => msg.role === "user" || msg.role === "tool" || (!conversationId && msg.role === "assistant"))
+      .map((msg) => {
+        if (msg.role === "tool") return this.extractToolResult(msg);
+        return this.extractTextFromMessage(msg);
+      })
+      .filter(Boolean)
+      .join("\n\n");
+  }
+
+  private extractSystemPrompt(messages: Message[]): string {
+    const systemMessage = messages.find(msg => msg.role === "system");
+    const rawSystemPrompt = systemMessage ? this.extractTextFromMessage(systemMessage) : "";
+
+    return formatSystemPrompt(rawSystemPrompt);
+  }
+
+  private extractTextFromMessage(msg: Message): string {
+    if (typeof msg.content === "string") {
+      return msg.content;
+    }
+    if (Array.isArray(msg.content)) {
+      return msg.content
+        .map((part: string | MessageContentPart) => {
+          if (typeof part === "string") return part;
+          if (part?.type === "text" && part.text) return part.text;
           return "";
         })
         .filter(Boolean)
         .join(" ");
     }
+    return "";
+  }
 
-    const conversationId = options.headers?.["chat-id"];
-    const userId = options.headers?.["user-id"] ?? "you_should_pass_user-id";
-    const {
-      "chat-id": _,
-      "user-id": __,
-      ...cleanHeaders
-    } = options.headers || {};
-    options.headers = cleanHeaders;
+  private extractToolResult(msg: Message): string {
+    const content = msg.content;
+    if (!Array.isArray(content)) return "";
 
-    return {
-      inputs: this.settings.inputs || {},
-      query,
-      response_mode: this.settings.responseMode,
-      conversation_id: conversationId,
-      user: userId,
-    };
+    const results: string[] = [];
+    for (const part of content) {
+      if (part?.type === "tool-result") {
+        const name = part.toolName || "tool";
+        const raw = part.output ?? part.result ?? part.content ?? part.text;
+        const output =
+          raw !== undefined && typeof raw === "object" && raw !== null && "value" in raw
+            ? (raw as { value: unknown }).value
+            : raw;
+        const result = output === undefined ? "[completed]" :
+          (typeof output === "string" ? output : JSON.stringify(output));
+        results.push(`[${name} result]: ${result}`);
+      }
+    }
+    return results.join("\n");
   }
 }

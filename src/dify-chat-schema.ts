@@ -48,12 +48,18 @@ export const workflowStartedSchema = difyStreamEventBase.extend({
 export const workflowFinishedSchema = difyStreamEventBase.extend({
   event: z.literal("workflow_finished"),
   workflow_run_id: z.string(),
+  task_id: z.string().optional(),
   data: z
     .object({
       id: z.string(),
       workflow_id: z.string(),
+      outputs: z.record(z.unknown()).optional(),
+      status: z.string().optional(),
+      elapsed_time: z.number().optional(),
       total_tokens: z.number().optional(),
-      created_at: z.number(),
+      total_steps: z.string().optional(),
+      created_at: z.number().optional(),
+      finished_at: z.number().optional(),
     })
     .passthrough(),
 });
@@ -91,19 +97,29 @@ export const messageSchema = difyStreamEventBase.extend({
 
 export const messageEndSchema = difyStreamEventBase.extend({
   event: z.literal("message_end"),
-  id: z.string(),
+  id: z.string().optional(),
   metadata: z
     .object({
       usage: z
         .object({
-          prompt_tokens: z.number(),
-          completion_tokens: z.number(),
-          total_tokens: z.number(),
+          prompt_tokens: z.number().optional(),
+          completion_tokens: z.number().optional(),
+          total_tokens: z.number().optional(),
+          prompt_unit_price: z.string().optional(),
+          prompt_price_unit: z.string().optional(),
+          prompt_price: z.string().optional(),
+          completion_unit_price: z.string().optional(),
+          completion_price_unit: z.string().optional(),
+          completion_price: z.string().optional(),
+          total_price: z.string().optional(),
+          currency: z.string().optional(),
+          latency: z.number().optional(),
         })
         .passthrough(),
+      retriever_resources: z.array(z.unknown()).optional(),
     })
     .passthrough(),
-  files: z.array(z.unknown()).optional(),
+  files: z.nullable(z.array(z.unknown())).optional(),
 });
 
 export const ttsMessageSchema = difyStreamEventBase.extend({
@@ -192,12 +208,38 @@ export const agentMessageSchema = difyStreamEventBase.extend({
 
 export const agentThoughtSchema = difyStreamEventBase.extend({
   event: z.literal("agent_thought"),
+  id: z.string(),
+  position: z.number(),
   thought: z.string(),
   observation: z.string(),
   tool: z.string(),
-  tool_labels: z.record(z.string(), z.string()),
+  tool_labels: z.record(z.string(), z.string()).optional(),
   tool_input: z.string(),
   message_files: z.array(z.unknown()),
+});
+
+export const messageReplaceSchema = difyStreamEventBase.extend({
+  event: z.literal("message_replace"),
+  answer: z.string(),
+});
+
+export const messageFileSchema = difyStreamEventBase.extend({
+  event: z.literal("message_file"),
+  id: z.string(),
+  type: z.string(),
+  belongs_to: z.string(),
+  url: z.string(),
+});
+
+export const pingSchema = difyStreamEventBase.extend({
+  event: z.literal("ping"),
+});
+
+export const errorSchema = difyStreamEventBase.extend({
+  event: z.literal("error"),
+  status: z.number().optional(),
+  code: z.string().optional(),
+  message: z.string().optional(),
 });
 
 // Combine all schemas with discriminatedUnion
@@ -213,6 +255,10 @@ export const difyStreamEventSchema = z
     ttsMessageEndSchema,
     agentThoughtSchema,
     agentMessageSchema,
+    messageReplaceSchema,
+    messageFileSchema,
+    pingSchema,
+    errorSchema,
   ])
   .or(difyStreamEventBase); // Fallback for any other event types
 
