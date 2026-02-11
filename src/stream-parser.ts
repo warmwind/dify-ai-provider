@@ -12,6 +12,8 @@ export class ThinkTagParser {
   private hasStarted = false;
   private closed = false; // Once </think> is seen, treat all subsequent <think> as plain text
   private textAccumulated = "";
+  private inString = false;
+  private escape = false;
 
   feed(chunk: string): ThinkSegment[] {
     const raw: ThinkSegment[] = [];
@@ -23,6 +25,28 @@ export class ThinkTagParser {
       if (!this.hasStarted) {
         if (ch.trim() === "") continue;
         this.hasStarted = true;
+      }
+
+      if (this.inString) {
+        if (this.escape) {
+          this.escape = false;
+          raw.push({ type: "text", content: ch });
+        } else if (ch === "\\") {
+          this.escape = true;
+          raw.push({ type: "text", content: ch });
+        } else if (ch === '"') {
+          this.inString = false;
+          raw.push({ type: "text", content: ch });
+        } else {
+          raw.push({ type: "text", content: ch });
+        }
+        continue;
+      }
+
+      if (ch === '"') {
+        this.inString = true;
+        raw.push({ type: "text", content: ch });
+        continue;
       }
 
       switch (this.state) {
@@ -113,6 +137,8 @@ export class ThinkTagParser {
     this.state = "text";
     this.closed = false;
     this.hasStarted = false;
+    this.inString = false;
+    this.escape = false;
     this.feed(text);
   }
 

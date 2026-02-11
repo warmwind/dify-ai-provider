@@ -98,6 +98,20 @@ describe("ThinkTagParser", () => {
     parser.reset("<think>unclosed");
     expect(parser.getTextWithoutThink()).toBe("");
   });
+
+  it("does not treat <think> inside double-quoted string (e.g. tool args) as think tag", () => {
+    const parser = new ThinkTagParser();
+    const jsonLike = "{\"name\":\"my_tool\",\"arguments\":{\"prompt\":\"Use <think> tag in your reply\"}}";
+    const segments = parser.feed(jsonLike);
+    expect(segments.every((s) => s.type === "text")).toBe(true);
+    expect(parser.getTextWithoutThink()).toBe(jsonLike);
+  });
+
+  it("does not treat </think> inside JSON string as think close", () => {
+    const parser = new ThinkTagParser();
+    parser.feed("<think>real think</think> text {\"note\":\"</think> here\"} more");
+    expect(parser.getTextWithoutThink()).toBe("text {\"note\":\"</think> here\"} more");
+  });
 });
 
 describe("parseToolCalls", () => {
@@ -149,6 +163,16 @@ describe("parseToolCalls", () => {
     const { toolCalls } = parseToolCalls(text, ["test-tool"], mockGenId);
     expect(toolCalls).toHaveLength(1);
     expect(toolCalls[0].name).toBe("test-tool");
+  });
+
+  it("parses tool call when arguments value contains <think> (simulating ThinkTagParser output)", () => {
+    const toolJson = "{\"name\": \"test-tool\", \"arguments\": {\"prompt\": \"Use <think> tag\"}}";
+    const parser = new ThinkTagParser();
+    parser.feed(toolJson);
+    const textWithoutThink = parser.getTextWithoutThink();
+    const { toolCalls } = parseToolCalls(textWithoutThink, toolNames, mockGenId);
+    expect(toolCalls).toHaveLength(1);
+    expect(toolCalls[0].input).toBe('{"prompt":"Use <think> tag"}');
   });
 });
 
