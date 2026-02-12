@@ -314,8 +314,10 @@ describe("DifyChatLanguageModel", () => {
       headers: { "Custom-Header": "custom-value" },
     } as any);
 
-    expect(capturedOptions.headers["Authorization"]).toBe("Bearer test");
-    expect(capturedOptions.headers["Custom-Header"]).toBe("custom-value");
+    // @ai-sdk/provider-utils v3 normalizes headers through the Headers API
+    // which lowercases all header names (per HTTP/2 spec)
+    expect(capturedOptions.headers["authorization"]).toBe("Bearer test");
+    expect(capturedOptions.headers["custom-header"]).toBe("custom-value");
   });
 
   it("should use default user-id when no user-id is provided", async () => {
