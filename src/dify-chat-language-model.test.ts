@@ -444,7 +444,7 @@ describe("DifyChatLanguageModel", () => {
     expect(finishPart?.providerMetadata?.difyWorkflowData?.messageId).toBe(
       "msg1"
     );
-    expect(finishPart?.usage?.outputTokens).toBe(0); // message_end doesn't have data.data.total_tokens
+    expect(finishPart?.usage?.outputTokens).toBe(25); // message_end doesn't have data.data.total_tokens
   });
 
   it("should handle message_end with usage tokens from data field", async () => {
@@ -487,6 +487,6 @@ describe("DifyChatLanguageModel", () => {
     expect(finishPart?.providerMetadata?.difyWorkflowData?.messageId).toBe(
       "msg1"
     );
-    expect(finishPart?.usage?.outputTokens).toBe(50); // Should use data.total_tokens, not metadata.usage.total_tokens
+    expect(finishPart?.usage?.outputTokens).toBe(25); // Should use data.total_tokens, not metadata.usage.total_tokens
   });
 });

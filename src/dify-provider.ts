@@ -1,5 +1,5 @@
-import { FetchFunction, generateId, loadApiKey } from "@ai-sdk/provider-utils";
-import { DifyChatSettings, DifyChatModelId } from "./dify-chat-settings";
+import { FetchFunction, loadApiKey } from "@ai-sdk/provider-utils";
+import { DifyChatSettings, DifyChatModelId, Logger } from "./dify-chat-settings";
 import { DifyChatLanguageModel } from "./dify-chat-language-model";
 
 // model factory function with additional methods and properties
@@ -32,6 +32,11 @@ export interface DifyProviderSettings {
    * or to provide a custom fetch implementation for e.g. testing.
    */
   fetch?: FetchFunction;
+
+  /**
+   * Logger instance for debugging. Set to `false` to disable logging.
+   */
+  logger?: Logger | false;
 }
 
 export function createDifyProvider(
