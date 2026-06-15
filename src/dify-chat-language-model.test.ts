@@ -314,10 +314,14 @@ describe("DifyChatLanguageModel", () => {
       headers: { "Custom-Header": "custom-value" },
     } as any);
 
-    // @ai-sdk/provider-utils v3 normalizes headers through the Headers API
-    // which lowercases all header names (per HTTP/2 spec)
-    expect(capturedOptions.headers["authorization"]).toBe("Bearer test");
-    expect(capturedOptions.headers["custom-header"]).toBe("custom-value");
+    const getHeader = (name: string) =>
+      typeof capturedOptions.headers.get === "function"
+        ? capturedOptions.headers.get(name)
+        : Object.entries(capturedOptions.headers).find(
+            ([key]) => key.toLowerCase() === name
+          )?.[1];
+    expect(getHeader("authorization")).toBe("Bearer test");
+    expect(getHeader("custom-header")).toBe("custom-value");
   });
 
   it("should use default user-id when no user-id is provided", async () => {
@@ -447,6 +451,74 @@ describe("DifyChatLanguageModel", () => {
       "msg1"
     );
     expect(finishPart?.usage?.outputTokens).toBe(25); // message_end doesn't have data.data.total_tokens
+  });
+
+  it("should emit retriever resources as source parts", async () => {
+    const retrieverResource = {
+      segment_id: "segment-1",
+      document_id: "document-1",
+      document_name: "Knowledge Base.md",
+      dataset_name: "Support docs",
+      content: "Relevant source excerpt",
+      score: 0.98,
+    };
+    const mockResponseText =
+      `data: {"event":"agent_message","answer":"Agent response","id":"agent1","conversation_id":"conv1","message_id":"msg1"}\n\n` +
+      `data: ${JSON.stringify({
+        event: "message_end",
+        id: "msg1",
+        metadata: {
+          usage: { prompt_tokens: 10, completion_tokens: 25, total_tokens: 35 },
+          retriever_resources: [retrieverResource],
+        },
+        conversation_id: "conv1",
+        message_id: "msg1",
+        task_id: "task1",
+      })}\n\n`;
+
+    const mockFetch = createMockFetch({
+      ok: true,
+      headers: new Map([["Content-Type", "text/event-stream"]]),
+      body: new ReadableStream({
+        start(controller) {
+          const encoder = new TextEncoder();
+          controller.enqueue(encoder.encode(mockResponseText));
+          controller.close();
+        },
+      }),
+      status: 200,
+    });
+
+    const model = makeModel({ fetch: mockFetch });
+    const { stream: resultStream } = await model.doStream({
+      prompt: [{ role: "user", content: [{ type: "text", text: "Hi" }] }],
+    } as any);
+
+    const parts: any[] = [];
+    const reader = resultStream.getReader();
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      parts.push(value);
+    }
+
+    const sourcePart = parts.find((p) => p.type === "source");
+    expect(sourcePart).toMatchObject({
+      type: "source",
+      sourceType: "document",
+      id: "segment-1",
+      mediaType: "text/plain",
+      title: "Knowledge Base.md",
+      filename: "Knowledge Base.md",
+      providerMetadata: {
+        difyWorkflowData: {
+          conversationId: "conv1",
+          messageId: "msg1",
+          taskId: "task1",
+          retrieverResource,
+        },
+      },
+    });
   });
 
   it("should handle message_end with usage tokens from data field", async () => {

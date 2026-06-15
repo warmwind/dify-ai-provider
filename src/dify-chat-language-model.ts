@@ -81,6 +81,51 @@ interface Message {
   [key: string]: unknown;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function getStringField(record: Record<string, unknown>, keys: string[]): string | undefined {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string" && value) return value;
+  }
+  return undefined;
+}
+
+function buildRetrieverResourceSources(
+  resources: unknown,
+  metadata: Record<string, JSONValue>
+): LanguageModelV2StreamPart[] {
+  if (!Array.isArray(resources)) return [];
+
+  return resources.map((resource, index) => {
+    const record = isRecord(resource) ? resource : {};
+    const id =
+      getStringField(record, ["segment_id", "document_id", "id"]) ??
+      `retriever-resource-${index + 1}`;
+    const title =
+      getStringField(record, ["document_name", "title", "dataset_name", "segment_id", "id"]) ??
+      `Retriever resource ${index + 1}`;
+    const filename = getStringField(record, ["document_name", "filename"]);
+
+    return {
+      type: "source",
+      sourceType: "document",
+      id,
+      mediaType: "text/plain",
+      title,
+      ...(filename ? { filename } : {}),
+      providerMetadata: {
+        difyWorkflowData: {
+          ...metadata,
+          retrieverResource: resource as JSONValue,
+        },
+      },
+    };
+  });
+}
+
 export class DifyChatLanguageModel implements LanguageModelV2 {
   readonly specificationVersion = "v2" as const;
   readonly modelId: string;
@@ -233,11 +278,16 @@ export class DifyChatLanguageModel implements LanguageModelV2 {
     const logger = this.logger;
     const logMessages = this.settings.logMessages;
 
-    function buildDifyMetadata() {
+    function buildDifyWorkflowData() {
       const meta: Record<string, JSONValue> = {};
       if (conversationId) meta.conversationId = conversationId as JSONValue;
       if (messageId) meta.messageId = messageId as JSONValue;
       if (taskId) meta.taskId = taskId as JSONValue;
+      return meta;
+    }
+
+    function buildDifyMetadata() {
+      const meta = buildDifyWorkflowData();
       return Object.keys(meta).length ? { providerMetadata: { difyWorkflowData: meta } } : {};
     }
 
@@ -339,6 +389,15 @@ export class DifyChatLanguageModel implements LanguageModelV2 {
                 } else if (!hasToolCalls) {
                   controller.enqueue({ type: "text-start", id: "0", ...buildDifyMetadata() });
                   controller.enqueue({ type: "text-end", id: "0", ...buildDifyMetadata() });
+                }
+
+                if (data.event === "message_end") {
+                  for (const sourcePart of buildRetrieverResourceSources(
+                    (data as any).metadata?.retriever_resources,
+                    buildDifyWorkflowData()
+                  )) {
+                    controller.enqueue(sourcePart);
+                  }
                 }
 
                 // Don't emit cleanText here since it was already emitted via stream
