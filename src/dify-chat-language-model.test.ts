@@ -563,4 +563,57 @@ describe("DifyChatLanguageModel", () => {
     );
     expect(finishPart?.usage?.outputTokens).toBe(25); // Should use data.total_tokens, not metadata.usage.total_tokens
   });
+
+  it("should handle ping events with empty data field gracefully", async () => {
+    // Dify sends pings as "event: ping\n\n" (SSE event-type format) with no data payload.
+    // This should not cause a stream error.
+    const mockResponseText =
+      `event: ping\n\n` +
+      `data: {"event":"message","answer":"Hello","id":"msg1"}\n\n` +
+      `event: ping\n\n` +
+      `data: {"event":"message","answer":" world","id":"msg1"}\n\n` +
+      `event: ping\n\n` +
+      `data: {"event":"workflow_finished","workflow_run_id":"wfr1","data":{"id":"wf1","workflow_id":"wfid1","total_tokens":10,"created_at":1625097600000},"conversation_id":"conv1","message_id":"msg1"}\n\n`;
+
+    const mockFetch = createMockFetch({
+      ok: true,
+      headers: new Map([["Content-Type", "text/event-stream"]]),
+      body: new ReadableStream({
+        start(controller) {
+          const encoder = new TextEncoder();
+          controller.enqueue(encoder.encode(mockResponseText));
+          controller.close();
+        },
+      }),
+      status: 200,
+    });
+
+    const model = makeModel({ fetch: mockFetch });
+    const { stream: resultStream } = await model.doStream({
+      prompt: [{ role: "user", content: [{ type: "text", text: "Hi" }] }],
+    } as any);
+
+    const parts: any[] = [];
+    const reader = resultStream.getReader();
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      parts.push(value);
+    }
+
+    // Verify text-delta parts are present (ping events should be skipped)
+    const textDeltaParts = parts.filter((p) => p.type === "text-delta");
+    expect(textDeltaParts.length).toBe(2);
+    expect(textDeltaParts[0].delta).toBe("Hello");
+    expect(textDeltaParts[1].delta).toBe(" world");
+
+    // Verify finish part
+    const finishPart = parts.find((p) => p.type === "finish");
+    expect(finishPart).toBeDefined();
+    expect(finishPart?.finishReason).toBe("stop");
+
+    // Verify no error parts
+    const errorParts = parts.filter((p) => p.type === "error");
+    expect(errorParts.length).toBe(0);
+  });
 });

@@ -1,5 +1,6 @@
 import {
   APICallError,
+  JSONParseError,
   type JSONValue,
   type LanguageModelV2,
   type LanguageModelV2CallOptions,
@@ -328,6 +329,14 @@ export class DifyChatLanguageModel implements LanguageModelV2 {
         >({
           transform(chunk, controller) {
             if (!chunk.success) {
+              // Handle ping events with empty data field.
+              // Dify sends pings as "event: ping\n\n" (SSE event-type format) with no data payload.
+              // @ai-sdk/provider-utils parseJsonEventStream only destructures { data }, yielding
+              // empty string for ping events, causing safeParseJSON({ text: "" }) to fail.
+              // Skip these silently since ping events are just keepalives.
+              if (JSONParseError.isInstance(chunk.error) && chunk.error.text === "") {
+                return;
+              }
               logger?.error("Dify stream parse error", { error: String(chunk.error) });
               controller.enqueue({ type: "error", error: chunk.error });
               return;
